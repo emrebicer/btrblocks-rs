@@ -32,6 +32,7 @@ fn main() {
 
     // Generate CXX bindings
     cxx_build::bridge("src/main.rs")
+        .file(btrblocks_source.join("btrblocks/btrblocks.cpp"))
         .include(btrblocks_source.join("btrblocks"))
         .include(dst.join("build//vendor/croaring/include"))
         .flag_if_supported("-std=c++17")
