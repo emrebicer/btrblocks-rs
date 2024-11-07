@@ -26,7 +26,7 @@ fn main() {
     println!("cmake dst is: {:#?}", dst);
 
     // Generate CXX bindings, include needed headers for btrblocks
-    cxx_build::bridge("src/main.rs")
+    cxx_build::bridge("src/lib.rs")
         .include(dst.join("btrblocks/btrblocks"))
         .include(dst.join("build/vendor/croaring/include"))
         .include(dst.join("build/vendor/cwida/fsst/src/fsst_src"))
@@ -71,7 +71,8 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", dst.join("build/vendor/croaring/lib").display());
     println!("cargo:rustc-link-lib=dylib=roaring");
 
-    println!("cargo:rerun-if-changed=src/main.rs");
+    println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed={}/build/libbtrblocks.a", dst.display());
 }
 
 
