@@ -26,7 +26,7 @@ mod tests {
         let datablock = crate::Datablock::new(&relation);
 
         let tuple_count = relation.tuple_count();
-        let input = relation.chunk(0, tuple_count, 0);
+        let input = relation.chunk(&vec![(0, tuple_count)], 0);
 
         let size = input.tuple_count() as usize * std::mem::size_of::<f64>() * 2;
 

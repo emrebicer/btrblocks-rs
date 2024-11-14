@@ -38,8 +38,7 @@ pub mod ffi {
         unsafe fn chunk_size_bytes(relation: *mut Chunk) -> usize;
         unsafe fn relation_get_chunk(
             relation: *mut Relation,
-            range_start: u64,
-            range_end: u64,
+            ranges: &Vec<u64>,
             size: usize,
         ) -> *mut Chunk;
         unsafe fn new_datablock(relation: *mut Relation) -> *mut Datablock;

@@ -55,13 +55,14 @@ impl Relation {
         unsafe { ffi::relation_get_tuple_count(self.inner) }
     }
 
-    // TODO: The original api expexts a vec of std::tuple, which cxx can't
-    // generate bindings for, so might just create a hacky way to get around it
-    // where rs api expects a Vec<(i32, i32)> and sends a Vec<i32> to ffi wrapper
-    // then construct the vec<std::tuple> there...
-    pub fn chunk(&self, range_start: u64, range_end: u64, size: usize) -> Chunk {
+    pub fn chunk(&self, ranges: &Vec<(u64, u64)>, size: usize) -> Chunk {
+        let mut ranges_flat = Vec::new();
+        for range in ranges {
+            ranges_flat.push(range.0);
+            ranges_flat.push(range.1);
+        }
         unsafe {
-            let ffi_chunk = ffi::relation_get_chunk(self.inner, range_start, range_end, size);
+            let ffi_chunk = ffi::relation_get_chunk(self.inner, &ranges_flat, size);
             Chunk::new(ffi_chunk)
         }
     }
