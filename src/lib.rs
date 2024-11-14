@@ -1,142 +1,56 @@
-#[cxx::bridge]
-pub mod btrblocks {
+mod btrblocks;
+mod ffi;
 
-    #[namespace = "btrblocks"]
-    unsafe extern "C++" {
-        type Relation;
-        type Chunk;
-        type Datablock;
-        type OutputBlockStats;
-    }
-
-    #[namespace = "btrblocksWrapper"]
-    unsafe extern "C++" {
-        include!("btrblocks_wrapper.hpp");
-
-        type Buffer;
-        type IntMMapVector;
-        type DoubleMMapVector;
-
-        fn configure_btrblocks(max_depth: u32);
-        fn set_log_level(level: i32);
-        fn new_relation() -> *mut Relation;
-        fn new_int_mmapvector(vec: &Vec<i32>) -> *mut IntMMapVector;
-        fn new_double_mmapvector(vec: &Vec<f64>) -> *mut DoubleMMapVector;
-
-        unsafe fn relation_add_column_int(
-            relation: *mut Relation,
-            column_name: &String,
-            btr_vec: *mut IntMMapVector,
-        );
-        unsafe fn relation_add_column_double(
-            relation: *mut Relation,
-            column_name: &String,
-            btr_vec: *mut DoubleMMapVector,
-        );
-        unsafe fn relation_get_tuple_count(relation: *mut Relation) -> u64;
-        unsafe fn chunk_get_tuple_count(relation: *mut Chunk) -> u64;
-        unsafe fn chunk_size_bytes(relation: *mut Chunk) -> usize;
-        unsafe fn relation_get_chunk(
-            relation: *mut Relation,
-            range_start: u64,
-            range_end: u64,
-            size: usize,
-        ) -> *mut Chunk;
-        unsafe fn new_datablock(relation: *mut Relation) -> *mut Datablock;
-        unsafe fn datablock_compress(
-            datablock: *mut Datablock,
-            chunk: *mut Chunk,
-            buffer: *mut Buffer,
-        ) -> *mut OutputBlockStats;
-        unsafe fn datablock_decompress(datablock: *mut Datablock, chunk: *mut Buffer)
-            -> *mut Chunk;
-        unsafe fn new_buffer(size: usize) -> *mut Buffer;
-        unsafe fn compare_chunks(rel: *mut Relation, c1: *mut Chunk, c2: *mut Chunk) -> bool;
-        unsafe fn stats_total_data_size(rel: *mut OutputBlockStats) -> usize;
-        unsafe fn stats_compression_ratio(rel: *mut OutputBlockStats) -> f64;
-    }
-}
-
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-    Critical,
-    Off,
-}
-
-impl Into<i32> for LogLevel {
-    fn into(self) -> i32 {
-        match self {
-            LogLevel::Trace => 0,
-            LogLevel::Debug => 1,
-            LogLevel::Info => 2,
-            LogLevel::Warn => 3,
-            LogLevel::Error => 4,
-            LogLevel::Critical => 5,
-            LogLevel::Off => 6,
-        }
-    }
-}
+pub use btrblocks::*;
 
 #[cfg(test)]
 mod tests {
-    use crate::btrblocks;
     use rand::rngs::StdRng;
     use rand::Rng;
     use rand::SeedableRng;
 
     #[test]
     fn random_int_double_compression() {
-        btrblocks::configure_btrblocks(3);
-        btrblocks::set_log_level(crate::LogLevel::Info.into());
+        crate::configure(3);
+        crate::set_log_level(crate::LogLevel::Info);
 
-        let relation = btrblocks::new_relation();
+        let relation = crate::Relation::new();
 
-        unsafe {
-            let int_vec = btrblocks::new_int_mmapvector(&generate_data(640000, (1 << 12) - 1, 40, 69));
-            btrblocks::relation_add_column_int(relation, &"ints".to_string(), int_vec);
+        let int_vec = crate::IntMMapVector::new(&generate_data(640000, (1 << 12) - 1, 40, 69));
+        relation.add_column_int(&"ints".to_string(), int_vec);
 
-            let double_vec =
-                btrblocks::new_double_mmapvector(&generate_data(640000, (1 << 12) - 1, 40, 42));
-            btrblocks::relation_add_column_double(relation, &"dbls".to_string(), double_vec);
+        let double_vec =
+            crate::DoubleMMapVector::new(&generate_data(640000, (1 << 12) - 1, 40, 42));
+        relation.add_column_double(&"dbls".to_string(), double_vec);
 
-            let datablock = btrblocks::new_datablock(relation);
+        let datablock = crate::Datablock::new(&relation);
 
-            let tuple_count = btrblocks::relation_get_tuple_count(relation);
-            let input = btrblocks::relation_get_chunk(relation, 0, tuple_count, 0);
-            let size =
-                btrblocks::chunk_get_tuple_count(input) as usize * std::mem::size_of::<f64>() * 2;
+        let tuple_count = relation.tuple_count();
+        let input = relation.chunk(0, tuple_count, 0);
 
-            // Create a buffer for output (it is just a unique pointer to [u8])
-            let output = btrblocks::new_buffer(size);
+        let size = input.tuple_count() as usize * std::mem::size_of::<f64>() * 2;
 
-            // Compress the input
-            let stats = btrblocks::datablock_compress(datablock, input, output);
-            println!("Stats:");
-            println!("\t Input size: {}", btrblocks::chunk_size_bytes(input));
-            println!(
-                "\t Output size: {}",
-                btrblocks::stats_total_data_size(stats)
-            );
-            println!(
-                "\t Compression ratio: {}",
-                btrblocks::stats_compression_ratio(stats)
-            );
+        // Create a buffer for output (it is just a unique pointer to [u8])
+        let output = crate::Buffer::new(size);
 
-            // Decompress the output
-            let decompressed = btrblocks::datablock_decompress(datablock, output);
+        // Compress the input
+        let stats = datablock.compress(&input, &output);
 
-            // Compare the input and output
-            let res = btrblocks::compare_chunks(relation, input, decompressed);
+        println!("Stats:");
+        println!("\t Input size: {}", input.size_bytes());
+        println!("\t Output size: {}", stats.total_data_size());
+        println!("\t Compression ratio: {}", stats.compression_ratio());
 
-            if res {
-                println!("decompressed data matches original data");
-            } else {
-                println!("decompressed data does NOT match original data");
-            }
+        // Decompress the output
+        let decompressed = datablock.decompress(&output);
+
+        // Compare the input and output
+        let res = relation.compare_chunks(&input, &decompressed);
+
+        if res {
+            println!("decompressed data matches original data");
+        } else {
+            println!("decompressed data does NOT match original data");
         }
     }
 
