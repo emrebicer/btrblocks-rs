@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::ffi::ffi;
 
 pub fn configure(max_depth: u32) {
@@ -30,6 +32,78 @@ impl Into<i32> for LogLevel {
             LogLevel::Off => 6,
         }
     }
+}
+
+#[derive(Debug)]
+enum ColumnType {
+    Integer = 0,
+    Double = 1,
+    String = 2,
+    Skip,
+    // The next types are out of scope
+    Float,
+    Bigint,
+    SmallInt,
+    Undefined,
+}
+
+impl From<u32> for ColumnType {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => ColumnType::Integer,
+            1 => ColumnType::Double,
+            2 => ColumnType::String,
+            3 => ColumnType::Skip,
+            4 => ColumnType::Float,
+            5 => ColumnType::Bigint,
+            6 => ColumnType::SmallInt,
+            _ => ColumnType::Undefined,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct FileMetadata {
+    num_columns: u32,
+    num_chunks: u32,
+    parts: Vec<ColumnPartInfo>,
+}
+
+impl FileMetadata {
+    /// Get the BtrBlocks metadata from the given btr directory
+    pub fn from_btr_dir(btr_path: &mut PathBuf) -> Self {
+        btr_path.push("metadata");
+        let path_ref = &btr_path.to_str().expect("must be a valid path").to_string();
+        let raw_metadata: Vec<u32> = ffi::get_file_metadata(path_ref);
+
+        let mut it = raw_metadata.iter();
+
+        let num_columns = it.next().expect("num_columns must exists in the data");
+        let num_chunks = it.next().expect("num_chunks must exists in the data");
+
+        let mut parts = vec![];
+        while let Some(part_type) = it.next() {
+            let num_parts = it
+                .next()
+                .expect("if there is a part_type, there also must be the num_parts");
+            parts.push(ColumnPartInfo {
+                r#type: (*part_type).into(),
+                num_parts: *num_parts,
+            });
+        }
+
+        FileMetadata {
+            num_columns: *num_columns,
+            num_chunks: *num_chunks,
+            parts,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ColumnPartInfo {
+    r#type: ColumnType,
+    num_parts: u32,
 }
 
 pub struct Relation {
