@@ -35,6 +35,7 @@
               llvmPackages_latest.libclang
               nixpkgs-unstable.legacyPackages.${system}.cargo
               nixpkgs-unstable.legacyPackages.${system}.rustc
+              nixpkgs-unstable.legacyPackages.${system}.rust-analyzer
           ];
 
           LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
