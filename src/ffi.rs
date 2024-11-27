@@ -22,7 +22,7 @@ pub mod ffi {
         fn new_relation() -> *mut Relation;
         fn new_int_mmapvector(vec: &Vec<i32>) -> *mut IntMMapVector;
         fn new_double_mmapvector(vec: &Vec<f64>) -> *mut DoubleMMapVector;
-        fn get_file_metadata(btr_dir_path: &String) -> Vec<u32>;
+        fn get_file_metadata(btr_dir_path: String) -> Vec<u32>;
 
         unsafe fn relation_add_column_int(
             relation: *mut Relation,

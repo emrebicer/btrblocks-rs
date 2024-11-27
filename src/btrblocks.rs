@@ -35,7 +35,7 @@ impl Into<i32> for LogLevel {
 }
 
 #[derive(Debug)]
-enum ColumnType {
+pub enum ColumnType {
     Integer = 0,
     Double = 1,
     String = 2,
@@ -64,17 +64,17 @@ impl From<u32> for ColumnType {
 
 #[derive(Debug)]
 pub struct FileMetadata {
-    num_columns: u32,
-    num_chunks: u32,
-    parts: Vec<ColumnPartInfo>,
+    pub num_columns: u32,
+    pub num_chunks: u32,
+    pub parts: Vec<ColumnPartInfo>,
 }
 
 impl FileMetadata {
     /// Get the BtrBlocks metadata from the given btr directory
     pub fn from_btr_dir(btr_path: &mut PathBuf) -> Self {
         btr_path.push("metadata");
-        let path_ref = &btr_path.to_str().expect("must be a valid path").to_string();
-        let raw_metadata: Vec<u32> = ffi::get_file_metadata(path_ref);
+        let path_str = btr_path.to_str().expect("must be a valid path").to_string();
+        let raw_metadata: Vec<u32> = ffi::get_file_metadata(path_str);
 
         let mut it = raw_metadata.iter();
 
@@ -102,8 +102,8 @@ impl FileMetadata {
 
 #[derive(Debug)]
 pub struct ColumnPartInfo {
-    r#type: ColumnType,
-    num_parts: u32,
+    pub r#type: ColumnType,
+    pub num_parts: u32,
 }
 
 pub struct Relation {
