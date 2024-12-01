@@ -22,16 +22,30 @@ pub mod ffi {
         fn new_relation() -> *mut Relation;
         fn new_int_mmapvector(vec: &Vec<i32>) -> *mut IntMMapVector;
         fn new_double_mmapvector(vec: &Vec<f64>) -> *mut DoubleMMapVector;
-        fn get_file_metadata(btr_dir_path: String) -> Vec<u32>;
+        fn get_file_metadata(btr_metadata_path: String) -> Vec<u32>;
+        fn decompress_column_into_file(
+            btr_path: String,
+            column_index: u32,
+            output_path: String,
+        ) -> Result<()>;
+        fn decompress_column_i32(btr_path: String, column_index: u32) -> Result<Vec<i32>>;
+        fn decompress_column_string(btr_path: String, column_index: u32) -> Result<Vec<String>>;
+        fn decompress_column_f64(btr_path: String, column_index: u32) -> Result<Vec<f64>>;
+        //fn csv_to_btr(
+        //    csv_path: String,
+        //    btr_path: String,
+        //    binary_path: String,
+        //    schema_yaml_path: String,
+        //) -> Result<()>;
 
         unsafe fn relation_add_column_int(
             relation: *mut Relation,
-            column_name: &String,
+            column_name: String,
             btr_vec: *mut IntMMapVector,
         );
         unsafe fn relation_add_column_double(
             relation: *mut Relation,
-            column_name: &String,
+            column_name: String,
             btr_vec: *mut DoubleMMapVector,
         );
         unsafe fn relation_get_tuple_count(relation: *mut Relation) -> u64;

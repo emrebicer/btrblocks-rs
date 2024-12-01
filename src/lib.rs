@@ -17,11 +17,11 @@ mod tests {
         let relation = crate::Relation::new();
 
         let int_vec = crate::IntMMapVector::new(&generate_data(640000, (1 << 12) - 1, 40, 69));
-        relation.add_column_int(&"ints".to_string(), int_vec);
+        relation.add_column_int("ints".to_string(), int_vec);
 
         let double_vec =
             crate::DoubleMMapVector::new(&generate_data(640000, (1 << 12) - 1, 40, 42));
-        relation.add_column_double(&"dbls".to_string(), double_vec);
+        relation.add_column_double("dbls".to_string(), double_vec);
 
         let datablock = crate::Datablock::new(&relation);
 

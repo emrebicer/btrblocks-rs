@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use temp_dir::TempDir;
 
 use crate::ffi::ffi;
 
@@ -70,8 +71,9 @@ pub struct FileMetadata {
 }
 
 impl FileMetadata {
-    /// Get the BtrBlocks metadata from the given btr directory
-    pub fn from_btr_dir(btr_path: &mut PathBuf) -> Self {
+    /// Get the BtrBlocks metadata from the given btr path
+    pub fn from_btr_path(mut btr_path: PathBuf) -> Self {
+        // TODO: Should be a result
         btr_path.push("metadata");
         let path_str = btr_path.to_str().expect("must be a valid path").to_string();
         let raw_metadata: Vec<u32> = ffi::get_file_metadata(path_str);
@@ -117,11 +119,11 @@ impl Relation {
         }
     }
 
-    pub fn add_column_int(&self, column_name: &String, btr_vec: IntMMapVector) {
+    pub fn add_column_int(&self, column_name: String, btr_vec: IntMMapVector) {
         unsafe { ffi::relation_add_column_int(self.inner, column_name, btr_vec.inner) }
     }
 
-    pub fn add_column_double(&self, column_name: &String, btr_vec: DoubleMMapVector) {
+    pub fn add_column_double(&self, column_name: String, btr_vec: DoubleMMapVector) {
         unsafe { ffi::relation_add_column_double(self.inner, column_name, btr_vec.inner) }
     }
 
@@ -249,6 +251,103 @@ impl Buffer {
     pub fn new(size: usize) -> Self {
         Self {
             inner: ffi::new_buffer(size),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Btr {
+    /// The path to the btrblocks compressed directory
+    btr_path: PathBuf,
+}
+
+impl Btr {
+    /// Construct a Btr object from an existing BtrBlocks compressed file
+    pub fn from_path(btr_path: PathBuf) -> Self {
+        Self { btr_path }
+    }
+
+    /// Construct a Btr object from an existing CSV file by compressing it
+    /// `btr_path` is the target path for the BtrBlocks compressed file output
+    //pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, scheme_yaml_path: PathBuf) -> Result<Self, String>{
+    //    // TODO: manually test this, if it works, add unit tests
+    //    let bin_temp_dir = TempDir::new().expect("should not fail to create a temp dir for binary data");
+    //    match ffi::csv_to_btr(
+    //        csv_path.to_str().expect("should be a valid path").to_string(),
+    //        btr_path.to_str().expect("should be a valid path").to_string(),
+    //        format!("{}/", bin_temp_dir.path().to_str().expect("should be a valid path")),
+    //        scheme_yaml_path.to_str().expect("should be a valid path").to_string(),
+    //    ) {
+    //        Ok(_) => Ok({
+    //            Self{
+    //                btr_path,
+    //            }
+    //        }),
+    //        Err(err) => Err(err.to_string()),
+    //    }
+    //}
+
+    pub fn file_metadata(&self) -> FileMetadata {
+        FileMetadata::from_btr_path(self.btr_path.clone())
+    }
+
+    pub fn decompress_column_into_file(
+        &self,
+        column_index: u32,
+        output_path: PathBuf,
+    ) -> Result<(), String> {
+        match ffi::decompress_column_into_file(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+            output_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+        ) {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    pub fn decompress_column_i32(&self, column_index: u32) -> Result<Vec<i32>, String> {
+        match ffi::decompress_column_i32(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+        ) {
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    pub fn decompress_column_string(&self, column_index: u32) -> Result<Vec<String>, String> {
+        match ffi::decompress_column_string(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+        ) {
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    pub fn decompress_column_f64(&self, column_index: u32) -> Result<Vec<f64>, String> {
+        match ffi::decompress_column_f64(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+        ) {
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err.to_string()),
         }
     }
 }
