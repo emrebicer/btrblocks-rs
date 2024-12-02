@@ -2,7 +2,7 @@
   description = "BtrBlocks git development flake";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.11";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
   };
 
@@ -10,8 +10,7 @@
 
     let 
       system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
-
+      pkgs = nixpkgs-unstable.legacyPackages.${system};
     in {
         devShells.${system}.default = pkgs.mkShellNoCC {
           buildInputs = with pkgs; [
@@ -26,12 +25,18 @@
               openssl_legacy
               curlFull
               ccls
+              # gflags
+              # yaml-cpp
+              # croaring
+              # spdlog
+              # tbb
+              boost
               pkg-config
               openssl
               llvmPackages_latest.libclang
-              nixpkgs-unstable.legacyPackages.${system}.cargo
-              nixpkgs-unstable.legacyPackages.${system}.rustc
-              nixpkgs-unstable.legacyPackages.${system}.rust-analyzer
+              cargo
+              rustc
+              rust-analyzer
           ];
 
           LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
