@@ -9,7 +9,7 @@ pub mod ffi {
         type OutputBlockStats;
     }
 
-    #[namespace = "btrblocksWrapper"]
+    #[namespace = "btrWrapper"]
     unsafe extern "C++" {
         include!("btrblocks_wrapper.hpp");
 
@@ -31,12 +31,12 @@ pub mod ffi {
         fn decompress_column_i32(btr_path: String, column_index: u32) -> Result<Vec<i32>>;
         fn decompress_column_string(btr_path: String, column_index: u32) -> Result<Vec<String>>;
         fn decompress_column_f64(btr_path: String, column_index: u32) -> Result<Vec<f64>>;
-        //fn csv_to_btr(
-        //    csv_path: String,
-        //    btr_path: String,
-        //    binary_path: String,
-        //    schema_yaml_path: String,
-        //) -> Result<()>;
+        fn csv_to_btr(
+            csv_path: String,
+            btr_path: String,
+            binary_path: String,
+            schema_yaml_path: String,
+        ) -> Result<()>;
 
         unsafe fn relation_add_column_int(
             relation: *mut Relation,

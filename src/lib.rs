@@ -5,9 +5,119 @@ pub use btrblocks::*;
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::str::FromStr;
+    use std::sync::Mutex;
+
     use rand::rngs::StdRng;
     use rand::Rng;
     use rand::SeedableRng;
+    use temp_dir::TempDir;
+
+    // Prevent test running in parallel,
+    // btrblocks does not seem to work well with parallel execution
+    static TEST_EXECUTER: Mutex<Executor> = Mutex::new(Executor);
+    #[derive(Clone, Copy)]
+    struct Executor;
+
+    impl Executor {
+        fn run_test(self, f: impl FnOnce()) {
+            f();
+        }
+    }
+
+    // TODO: refactor the csv data fields into functions to make it scale easier
+
+    fn create_temp_btr_from_csv(temp_files_dir: &TempDir, temp_btr_dir: &TempDir) -> crate::Btr {
+        // Create temp csv file
+        let csv_path = PathBuf::from_str(
+            format!("{}/data.csv", temp_files_dir.path().to_str().unwrap()).as_str(),
+        )
+        .unwrap();
+
+        let mut csv_file = File::create(csv_path.clone()).unwrap();
+        csv_file
+            .write_all("1,Julia,0.123\n2,Peter,213.1232\n3,Jack,4.20".as_bytes())
+            .unwrap();
+
+        let btr_path = PathBuf::from_str(temp_btr_dir.path().to_str().unwrap()).unwrap();
+
+        // Create temp csv schema file
+        let schema_path = PathBuf::from_str(
+            format!("{}/schema.yaml", temp_files_dir.path().to_str().unwrap()).as_str(),
+        )
+        .unwrap();
+
+        let mut schema_file = File::create(schema_path.clone()).unwrap();
+        schema_file
+            .write_all(
+                "columns:
+  - name: Id
+    type: integer
+    
+  - name: Name
+    type: string
+
+  - name: Score
+    type: double
+"
+                .as_bytes(),
+            )
+            .unwrap();
+
+        let res = crate::Btr::from_csv(csv_path, btr_path, schema_path);
+        assert!(res.is_ok());
+
+        res.unwrap()
+    }
+
+    #[test]
+    fn csv_to_btr() {
+        TEST_EXECUTER.lock().unwrap().run_test(|| {
+            let temp_files_dir =
+                TempDir::new().expect("should not fail to create a temp dir for csv data");
+            let btr_temp_dir = TempDir::new().unwrap();
+            let _ = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
+        });
+    }
+
+    #[test]
+    fn btr_decompress_column_i32() {
+        TEST_EXECUTER.lock().unwrap().run_test(|| {
+            let temp_files_dir =
+                TempDir::new().expect("should not fail to create a temp dir for csv data");
+            let temp_btr_dir = TempDir::new().unwrap();
+            let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
+            let ids = btr.decompress_column_i32(0).unwrap();
+            assert_eq!(ids, vec![1, 2, 3]);
+        });
+    }
+
+    #[test]
+    fn btr_decompress_column_string() {
+        TEST_EXECUTER.lock().unwrap().run_test(|| {
+            let temp_files_dir =
+                TempDir::new().expect("should not fail to create a temp dir for csv data");
+            let temp_btr_dir = TempDir::new().unwrap();
+            let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
+            let names = btr.decompress_column_string(1).unwrap();
+            assert_eq!(names, vec!["Julia", "Peter", "Jack"]);
+        });
+    }
+
+    #[test]
+    fn btr_decompress_column_double() {
+        TEST_EXECUTER.lock().unwrap().run_test(|| {
+            let temp_files_dir =
+                TempDir::new().expect("should not fail to create a temp dir for csv data");
+            let temp_btr_dir = TempDir::new().unwrap();
+            let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
+            let scores = btr.decompress_column_f64(2).unwrap();
+            assert_eq!(scores, vec![0.123, 213.1232, 4.20]);
+        });
+    }
 
     #[test]
     fn random_int_double_compression() {

@@ -19,7 +19,6 @@ fn main() {
     // build the project using cmake
     let dst = cmake::Config::new(btrblocks_source.clone())
         .define("CMAKE_CXX_STANDARD", "17")
-        .target("btrblocks")
         .build();
 
 
@@ -30,6 +29,7 @@ fn main() {
     cxx_build::bridge("src/ffi.rs")
         .include(dst.join("btrblocks/btrblocks"))
         .include(dst.join("btrblocks/btrfiles"))
+        .include(dst.join("btrblocks/btrwrapper"))
         .include(dst.join("build/vendor/croaring/include"))
         .include(dst.join("build/vendor/cwida/fsst/src/fsst_src"))
         .include(dst.join("build/vendor/lemire/fastpfor/src/fastpfor_src"))
@@ -60,6 +60,10 @@ fn main() {
         .compile("btrblocks-rust");
 
     // Link with the dependencies
+    // btrwrapper
+    println!("cargo:rustc-link-search=native={}/build", dst.display());
+    println!("cargo:rustc-link-lib=static=btrwrapper");
+
     // btrblocks
     println!("cargo:rustc-link-search=native={}/build", dst.display());
     println!("cargo:rustc-link-lib=static=btrblocks");
@@ -93,6 +97,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed={}/build/libbtrblocks.a", dst.display());
     println!("cargo:rerun-if-changed={}/build/libbtrfiles.a", dst.display());
+    println!("cargo:rerun-if-changed={}/build/libbtrwrapper.a", dst.display());
 }
 
 

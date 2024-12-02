@@ -269,23 +269,22 @@ impl Btr {
 
     /// Construct a Btr object from an existing CSV file by compressing it
     /// `btr_path` is the target path for the BtrBlocks compressed file output
-    //pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, scheme_yaml_path: PathBuf) -> Result<Self, String>{
-    //    // TODO: manually test this, if it works, add unit tests
-    //    let bin_temp_dir = TempDir::new().expect("should not fail to create a temp dir for binary data");
-    //    match ffi::csv_to_btr(
-    //        csv_path.to_str().expect("should be a valid path").to_string(),
-    //        btr_path.to_str().expect("should be a valid path").to_string(),
-    //        format!("{}/", bin_temp_dir.path().to_str().expect("should be a valid path")),
-    //        scheme_yaml_path.to_str().expect("should be a valid path").to_string(),
-    //    ) {
-    //        Ok(_) => Ok({
-    //            Self{
-    //                btr_path,
-    //            }
-    //        }),
-    //        Err(err) => Err(err.to_string()),
-    //    }
-    //}
+    pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, scheme_yaml_path: PathBuf) -> Result<Self, String>{
+        let bin_temp_dir = TempDir::new().expect("should not fail to create a temp dir for binary data");
+        match ffi::csv_to_btr(
+            csv_path.to_str().expect("should be a valid path").to_string(),
+            btr_path.to_str().expect("should be a valid path").to_string(),
+            format!("{}/", bin_temp_dir.path().to_str().expect("should be a valid path")),
+            scheme_yaml_path.to_str().expect("should be a valid path").to_string(),
+        ) {
+            Ok(_) => Ok({
+                Self{
+                    btr_path,
+                }
+            }),
+            Err(err) => Err(err.to_string()),
+        }
+    }
 
     pub fn file_metadata(&self) -> FileMetadata {
         FileMetadata::from_btr_path(self.btr_path.clone())
