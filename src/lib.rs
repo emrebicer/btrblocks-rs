@@ -1,4 +1,7 @@
+// TODO: add tests for column decompressions to file
+// TODO: add  tests for datafusion sql query impl
 mod btrblocks;
+pub mod datafusion;
 mod ffi;
 
 pub use btrblocks::*;

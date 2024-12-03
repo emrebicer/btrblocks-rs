@@ -96,7 +96,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed={}/build/libbtrblocks.a", dst.display());
-    println!("cargo:rerun-if-changed={}/build/libbtrfiles.a", dst.display());
+    //println!("cargo:rerun-if-changed={}/build/libbtrfiles.a", dst.display());
     println!("cargo:rerun-if-changed={}/build/libbtrwrapper.a", dst.display());
 }
 
