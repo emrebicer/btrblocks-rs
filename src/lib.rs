@@ -28,7 +28,17 @@ mod tests {
         }
     }
 
-    // TODO: refactor the csv data fields into functions to make it scale easier
+    fn get_mock_ids() -> Vec<i32> {
+        vec![1, 2, 3]
+    }
+
+    fn get_mock_names() -> Vec<String> {
+        vec!["Julia".to_string(), "Peter".to_string(), "Jack".to_string()]
+    }
+
+    fn get_mock_scores() -> Vec<f64> {
+        vec![0.123, 213.1232, 4.20]
+    }
 
     fn create_temp_btr_from_csv(temp_files_dir: &TempDir, temp_btr_dir: &TempDir) -> crate::Btr {
         // Create temp csv file
@@ -38,9 +48,21 @@ mod tests {
         .unwrap();
 
         let mut csv_file = File::create(csv_path.clone()).unwrap();
-        csv_file
-            .write_all("1,Julia,0.123\n2,Peter,213.1232\n3,Jack,4.20".as_bytes())
-            .unwrap();
+        let ids = get_mock_ids();
+        let names = get_mock_names();
+        let scores = get_mock_scores();
+
+        assert_eq!(ids.len(), names.len());
+        assert_eq!(names.len(), scores.len());
+
+        for i in 0..ids.len() {
+            csv_file.write(ids.get(i).unwrap().to_string().as_str().as_bytes()).unwrap();
+            csv_file.write(",".as_bytes()).unwrap();
+            csv_file.write(names.get(i).unwrap().as_str().as_bytes()).unwrap();
+            csv_file.write(",".as_bytes()).unwrap();
+            csv_file.write(scores.get(i).unwrap().to_string().as_str().as_bytes()).unwrap();
+            csv_file.write("\n".as_bytes()).unwrap();
+        }
 
         let btr_path = PathBuf::from_str(temp_btr_dir.path().to_str().unwrap()).unwrap();
 
@@ -91,7 +113,7 @@ mod tests {
             let temp_btr_dir = TempDir::new().unwrap();
             let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
             let ids = btr.decompress_column_i32(0).unwrap();
-            assert_eq!(ids, vec![1, 2, 3]);
+            assert_eq!(ids, get_mock_ids());
         });
     }
 
@@ -103,7 +125,7 @@ mod tests {
             let temp_btr_dir = TempDir::new().unwrap();
             let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
             let names = btr.decompress_column_string(1).unwrap();
-            assert_eq!(names, vec!["Julia", "Peter", "Jack"]);
+            assert_eq!(names, get_mock_names());
         });
     }
 
@@ -115,7 +137,7 @@ mod tests {
             let temp_btr_dir = TempDir::new().unwrap();
             let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
             let scores = btr.decompress_column_f64(2).unwrap();
-            assert_eq!(scores, vec![0.123, 213.1232, 4.20]);
+            assert_eq!(scores, get_mock_scores());
         });
     }
 
