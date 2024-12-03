@@ -56,40 +56,29 @@ mod tests {
         assert_eq!(names.len(), scores.len());
 
         for i in 0..ids.len() {
-            csv_file.write(ids.get(i).unwrap().to_string().as_str().as_bytes()).unwrap();
+            csv_file
+                .write(ids.get(i).unwrap().to_string().as_str().as_bytes())
+                .unwrap();
             csv_file.write(",".as_bytes()).unwrap();
-            csv_file.write(names.get(i).unwrap().as_str().as_bytes()).unwrap();
+            csv_file
+                .write(names.get(i).unwrap().as_str().as_bytes())
+                .unwrap();
             csv_file.write(",".as_bytes()).unwrap();
-            csv_file.write(scores.get(i).unwrap().to_string().as_str().as_bytes()).unwrap();
+            csv_file
+                .write(scores.get(i).unwrap().to_string().as_str().as_bytes())
+                .unwrap();
             csv_file.write("\n".as_bytes()).unwrap();
         }
 
         let btr_path = PathBuf::from_str(temp_btr_dir.path().to_str().unwrap()).unwrap();
 
-        // Create temp csv schema file
-        let schema_path = PathBuf::from_str(
-            format!("{}/schema.yaml", temp_files_dir.path().to_str().unwrap()).as_str(),
-        )
-        .unwrap();
+        let schema = crate::Schema::new(vec![
+            crate::ColumnMetadata::new("Id".to_string(), crate::ColumnType::Integer),
+            crate::ColumnMetadata::new("Name".to_string(), crate::ColumnType::String),
+            crate::ColumnMetadata::new("Score".to_string(), crate::ColumnType::Double),
+        ]);
 
-        let mut schema_file = File::create(schema_path.clone()).unwrap();
-        schema_file
-            .write_all(
-                "columns:
-  - name: Id
-    type: integer
-    
-  - name: Name
-    type: string
-
-  - name: Score
-    type: double
-"
-                .as_bytes(),
-            )
-            .unwrap();
-
-        let res = crate::Btr::from_csv(csv_path, btr_path, schema_path);
+        let res = crate::Btr::from_csv(csv_path, btr_path, schema);
         assert!(res.is_ok());
 
         res.unwrap()

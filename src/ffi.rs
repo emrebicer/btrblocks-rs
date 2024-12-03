@@ -35,7 +35,7 @@ pub mod ffi {
             csv_path: String,
             btr_path: String,
             binary_path: String,
-            schema_yaml_path: String,
+            schema_data_vec: Vec<String>,
         ) -> Result<()>;
 
         unsafe fn relation_add_column_int(

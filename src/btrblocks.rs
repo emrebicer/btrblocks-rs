@@ -11,6 +11,27 @@ pub fn set_log_level(level: LogLevel) {
     ffi::set_log_level(level.into());
 }
 
+pub struct Schema {
+    pub columns: Vec<ColumnMetadata>,
+}
+
+impl Schema {
+    pub fn new(columns: Vec<ColumnMetadata>) -> Self {
+        Self { columns }
+    }
+}
+
+pub struct ColumnMetadata {
+    pub name: String,
+    pub r#type: ColumnType,
+}
+
+impl ColumnMetadata {
+    pub fn new(name: String, r#type: ColumnType) -> Self {
+        Self { name, r#type }
+    }
+}
+
 pub enum LogLevel {
     Trace,
     Debug,
@@ -59,6 +80,21 @@ impl From<u32> for ColumnType {
             5 => ColumnType::Bigint,
             6 => ColumnType::SmallInt,
             _ => ColumnType::Undefined,
+        }
+    }
+}
+
+impl Into<String> for ColumnType {
+    fn into(self) -> String {
+        match self {
+            ColumnType::Integer => "integer".to_string(),
+            ColumnType::Double => "double".to_string(),
+            ColumnType::String => "string".to_string(),
+            ColumnType::Skip => "skip".to_string(),
+            ColumnType::Float => "float".to_string(),
+            ColumnType::Bigint => "bigint".to_string(),
+            ColumnType::SmallInt => "smallint".to_string(),
+            ColumnType::Undefined => "undefined".to_string(),
         }
     }
 }
@@ -269,19 +305,35 @@ impl Btr {
 
     /// Construct a Btr object from an existing CSV file by compressing it
     /// `btr_path` is the target path for the BtrBlocks compressed file output
-    pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, scheme_yaml_path: PathBuf) -> Result<Self, String>{
-        let bin_temp_dir = TempDir::new().expect("should not fail to create a temp dir for binary data");
+    pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self, String> {
+        let bin_temp_dir =
+            TempDir::new().expect("should not fail to create a temp dir for binary data");
+
+        let mut schema_data_vec = vec![];
+        for column in schema.columns {
+            schema_data_vec.push(column.name);
+            schema_data_vec.push(column.r#type.into());
+        }
+
         match ffi::csv_to_btr(
-            csv_path.to_str().expect("should be a valid path").to_string(),
-            btr_path.to_str().expect("should be a valid path").to_string(),
-            format!("{}/", bin_temp_dir.path().to_str().expect("should be a valid path")),
-            scheme_yaml_path.to_str().expect("should be a valid path").to_string(),
+            csv_path
+                .to_str()
+                .expect("should be a valid path")
+                .to_string(),
+            btr_path
+                .to_str()
+                .expect("should be a valid path")
+                .to_string(),
+            format!(
+                "{}/",
+                bin_temp_dir
+                    .path()
+                    .to_str()
+                    .expect("should be a valid path")
+            ),
+            schema_data_vec,
         ) {
-            Ok(_) => Ok({
-                Self{
-                    btr_path,
-                }
-            }),
+            Ok(_) => Ok(Self { btr_path }),
             Err(err) => Err(err.to_string()),
         }
     }
