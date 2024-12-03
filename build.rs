@@ -28,7 +28,7 @@ fn main() {
     // Generate CXX bindings, include needed headers for btrblocks
     cxx_build::bridge("src/ffi.rs")
         .include(dst.join("btrblocks/btrblocks"))
-        .include(dst.join("btrblocks/btrfiles"))
+        //.include(dst.join("btrblocks/btrfiles"))
         .include(dst.join("btrblocks/btrwrapper"))
         .include(dst.join("build/vendor/croaring/include"))
         .include(dst.join("build/vendor/cwida/fsst/src/fsst_src"))
@@ -45,11 +45,11 @@ fn main() {
         .include(dst.join("build/vendor/boost/boost_src-src/libs/throw_exception/include"))
         .include(dst.join("build/vendor/boost/boost_src-src/libs/integer/include"))
         .include(dst.join("build/vendor/boost/boost_src-src/libs/move/include"))
-        .include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include"))
-        .include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp"))
-        .include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp/contrib"))
-        .include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp/node"))
-        .include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp/node/detail"))
+        //.include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include"))
+        //.include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp"))
+        //.include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp/contrib"))
+        //.include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp/node"))
+        //.include(dst.join("build/vendor/yaml_cpp/src/yaml_src/include/yaml-cpp/node/detail"))
         .include(dst.join("build/vendor/csv-parser/include"))
         .flag_if_supported("-pthread")
         .flag_if_supported("-std=gnu++17")
@@ -69,8 +69,8 @@ fn main() {
     println!("cargo:rustc-link-lib=static=btrblocks");
 
     // btrfiles
-    println!("cargo:rustc-link-search=native={}/build", dst.display());
-    println!("cargo:rustc-link-lib=static=btrfiles");
+    //println!("cargo:rustc-link-search=native={}/build", dst.display());
+    //println!("cargo:rustc-link-lib=static=btrfiles");
 
     // fsst
     println!("cargo:rustc-link-search=native={}", dst.join("build/vendor/cwida/fsst/src/fsst_src-build").display());
@@ -91,8 +91,8 @@ fn main() {
     println!("cargo:rustc-link-lib=dylib=tbb");
 
     // yaml-cpp
-    println!("cargo:rustc-link-search=native={}", dst.join("build/vendor/yaml_cpp/src/yaml_src-build").display());
-    println!("cargo:rustc-link-lib=static=yaml-cpp");
+    //println!("cargo:rustc-link-search=native={}", dst.join("build/vendor/yaml_cpp/src/yaml_src-build").display());
+    //println!("cargo:rustc-link-lib=static=yaml-cpp");
 
     println!("cargo:rerun-if-changed=src/ffi.rs");
     println!("cargo:rerun-if-changed={}/build/libbtrblocks.a", dst.display());
