@@ -19,6 +19,7 @@ fn main() {
     // build the project using cmake
     let dst = cmake::Config::new(btrblocks_source.clone())
         .define("CMAKE_CXX_STANDARD", "17")
+        .target("btrwrapper")
         .out_dir(btrblocks_source)
         .build();
 
