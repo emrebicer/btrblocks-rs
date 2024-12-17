@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use serde::Deserialize;
 use temp_dir::TempDir;
 
 use crate::ffi::ffi;
@@ -11,6 +12,7 @@ pub fn set_log_level(level: LogLevel) {
     ffi::set_log_level(level.into());
 }
 
+#[derive(Debug, Deserialize)]
 pub struct Schema {
     pub columns: Vec<ColumnMetadata>,
 }
@@ -21,6 +23,7 @@ impl Schema {
     }
 }
 
+#[derive(Debug, Deserialize)]
 pub struct ColumnMetadata {
     pub name: String,
     pub r#type: ColumnType,
@@ -56,7 +59,8 @@ impl Into<i32> for LogLevel {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ColumnType {
     Integer = 0,
     Double = 1,
