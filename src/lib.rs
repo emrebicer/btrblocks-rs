@@ -19,6 +19,8 @@ mod tests {
     use rand::SeedableRng;
     use temp_dir::TempDir;
 
+    use crate::ColumnType;
+
     // Prevent test running in parallel,
     // btrblocks does not seem to work well with parallel execution
     static TEST_EXECUTER: Mutex<Executor> = Mutex::new(Executor);
@@ -98,6 +100,86 @@ mod tests {
     }
 
     #[test]
+    fn btr_decompress_by_parts() {
+        // TODO: this test is not that meaningful as there will be only 1 part per column
+        // with this little data... I can generate way more random data on the fly but this
+        // will hinder the UX as running tests will be way slower, ideally find a way to 
+        // force creating multiple parts with little data, the configure methods does not seem to
+        // work for this...
+        TEST_EXECUTER.lock().unwrap().run_test(|| {
+            let temp_files_dir =
+                TempDir::new().expect("should not fail to create a temp dir for csv data");
+            let btr_temp_dir = TempDir::new().unwrap();
+            let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
+
+            let meta = btr.file_metadata();
+
+            for (col_index, part_info) in meta.parts.iter().enumerate() {
+                match part_info.r#type {
+                    ColumnType::Integer => {
+                        // Read all data by iterating over parts
+                        let mut parts_vec = Vec::new();
+                        println!("number of int parts: {}", part_info.num_parts);
+                        for part_index in 0..part_info.num_parts {
+                            parts_vec.append(
+                                &mut btr
+                                    .decompress_column_part_i32(col_index as u32, part_index)
+                                    .expect("decompression should not fail"),
+                            );
+                        }
+
+                        // Read all data at once
+                        let column_vec = btr
+                            .decompress_column_i32(col_index as u32)
+                            .expect("decompression should not fail");
+
+                        assert_eq!(parts_vec, column_vec);
+                    }
+                    ColumnType::Double => {
+                        // Read all data by iterating over parts
+                        let mut parts_vec = Vec::new();
+                        println!("number of f64 parts: {}", part_info.num_parts);
+                        for part_index in 0..part_info.num_parts {
+                            parts_vec.append(
+                                &mut btr
+                                    .decompress_column_part_f64(col_index as u32, part_index)
+                                    .expect("decompression should not fail"),
+                            );
+                        }
+
+                        // Read all data at once
+                        let column_vec = btr
+                            .decompress_column_f64(col_index as u32)
+                            .expect("decompression should not fail");
+
+                        assert_eq!(parts_vec, column_vec);
+                    }
+                    ColumnType::String => {
+                        // Read all data by iterating over parts
+                        let mut parts_vec = Vec::new();
+                        println!("number of string parts: {}", part_info.num_parts);
+                        for part_index in 0..part_info.num_parts {
+                            parts_vec.append(
+                                &mut btr
+                                    .decompress_column_part_string(col_index as u32, part_index)
+                                    .expect("decompression should not fail"),
+                            );
+                        }
+
+                        // Read all data at once
+                        let column_vec = btr
+                            .decompress_column_string(col_index as u32)
+                            .expect("decompression should not fail");
+
+                        assert_eq!(parts_vec, column_vec);
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+
+    #[test]
     fn btr_decompress_column_i32() {
         TEST_EXECUTER.lock().unwrap().run_test(|| {
             let temp_files_dir =
@@ -135,7 +217,7 @@ mod tests {
 
     #[test]
     fn random_int_double_compression() {
-        crate::configure(3);
+        crate::configure(3, 65536);
         crate::set_log_level(crate::LogLevel::Info);
 
         let relation = crate::Relation::new();

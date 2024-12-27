@@ -17,7 +17,7 @@ pub mod ffi {
         type IntMMapVector;
         type DoubleMMapVector;
 
-        fn configure_btrblocks(max_depth: u32);
+        fn configure_btrblocks(max_depth: u32, block_size: u32);
         fn set_log_level(level: i32);
         fn new_relation() -> *mut Relation;
         fn new_int_mmapvector(vec: &Vec<i32>) -> *mut IntMMapVector;
@@ -29,8 +29,25 @@ pub mod ffi {
             output_path: String,
         ) -> Result<()>;
         fn decompress_column_i32(btr_path: String, column_index: u32) -> Result<Vec<i32>>;
+        fn decompress_column_part_i32(
+            btr_path: String,
+            column_index: u32,
+            part_index: u32,
+        ) -> Result<Vec<i32>>;
+
         fn decompress_column_string(btr_path: String, column_index: u32) -> Result<Vec<String>>;
+        fn decompress_column_part_string(
+            btr_path: String,
+            column_index: u32,
+            part_index: u32,
+        ) -> Result<Vec<String>>;
+
         fn decompress_column_f64(btr_path: String, column_index: u32) -> Result<Vec<f64>>;
+        fn decompress_column_part_f64(
+            btr_path: String,
+            column_index: u32,
+            part_index: u32,
+        ) -> Result<Vec<f64>>;
         fn csv_to_btr(
             csv_path: String,
             btr_path: String,

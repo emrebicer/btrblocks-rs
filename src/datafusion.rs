@@ -147,14 +147,19 @@ impl ExecutionPlan for BtrBlocksExec {
         // Vector to hold Arrow arrays for the columns
         let mut data_vec: Vec<Arc<dyn Array>> = vec![];
 
-        for (col_index, part) in meta.parts.iter().enumerate() {
-            match part.r#type {
+        for (col_index, part_info) in meta.parts.iter().enumerate() {
+            match part_info.r#type {
                 ColumnType::Integer => {
-                    let vec = self
-                        .data_source
-                        .btr
-                        .decompress_column_i32(col_index as u32)
-                        .expect("decompression should not fail");
+                    let mut vec = Vec::new();
+                    for part_index in 0..part_info.num_parts {
+                        vec.append(
+                            &mut self
+                                .data_source
+                                .btr
+                                .decompress_column_part_i32(col_index as u32, part_index)
+                                .expect("decompression should not fail"),
+                        );
+                    }
 
                     // Read the decompressed values into an Arrow array
                     let mut builder = Int32Builder::new();
@@ -167,11 +172,16 @@ impl ExecutionPlan for BtrBlocksExec {
                     data_vec.push(Arc::new(builder.finish()));
                 }
                 ColumnType::Double => {
-                    let vec = self
-                        .data_source
-                        .btr
-                        .decompress_column_f64(col_index as u32)
-                        .expect("decompression should not fail");
+                    let mut vec = Vec::new();
+                    for part_index in 0..part_info.num_parts {
+                        vec.append(
+                            &mut self
+                                .data_source
+                                .btr
+                                .decompress_column_part_f64(col_index as u32, part_index)
+                                .expect("decompression should not fail"),
+                        );
+                    }
 
                     // Read the decompressed values into an Arrow array
                     let mut builder = Float64Builder::new(); // For UInt32 column
@@ -184,11 +194,16 @@ impl ExecutionPlan for BtrBlocksExec {
                     data_vec.push(Arc::new(builder.finish()));
                 }
                 ColumnType::String => {
-                    let vec = self
-                        .data_source
-                        .btr
-                        .decompress_column_string(col_index as u32)
-                        .expect("decompression should not fail");
+                    let mut vec = Vec::new();
+                    for part_index in 0..part_info.num_parts {
+                        vec.append(
+                            &mut self
+                                .data_source
+                                .btr
+                                .decompress_column_part_string(col_index as u32, part_index)
+                                .expect("decompression should not fail"),
+                        );
+                    }
 
                     // Read the decompressed values into an Arrow array
                     let mut builder = StringBuilder::new(); // For UInt32 column

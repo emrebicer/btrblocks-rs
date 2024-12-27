@@ -1,11 +1,11 @@
-use std::path::PathBuf;
 use serde::Deserialize;
+use std::path::PathBuf;
 use temp_dir::TempDir;
 
 use crate::ffi::ffi;
 
-pub fn configure(max_depth: u32) {
-    ffi::configure_btrblocks(max_depth);
+pub fn configure(max_depth: u32, block_size: u32) {
+    ffi::configure_btrblocks(max_depth, block_size);
 }
 
 pub fn set_log_level(level: LogLevel) {
@@ -380,6 +380,24 @@ impl Btr {
         }
     }
 
+    pub fn decompress_column_part_i32(
+        &self,
+        column_index: u32,
+        part_index: u32,
+    ) -> Result<Vec<i32>, String> {
+        match ffi::decompress_column_part_i32(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+            part_index,
+        ) {
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
     pub fn decompress_column_string(&self, column_index: u32) -> Result<Vec<String>, String> {
         match ffi::decompress_column_string(
             self.btr_path
@@ -393,6 +411,24 @@ impl Btr {
         }
     }
 
+    pub fn decompress_column_part_string(
+        &self,
+        column_index: u32,
+        part_index: u32,
+    ) -> Result<Vec<String>, String> {
+        match ffi::decompress_column_part_string(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+            part_index,
+        ) {
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
     pub fn decompress_column_f64(&self, column_index: u32) -> Result<Vec<f64>, String> {
         match ffi::decompress_column_f64(
             self.btr_path
@@ -400,6 +436,24 @@ impl Btr {
                 .expect("must be a valid path")
                 .to_string(),
             column_index,
+        ) {
+            Ok(vec) => Ok(vec),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
+    pub fn decompress_column_part_f64(
+        &self,
+        column_index: u32,
+        part_index: u32,
+    ) -> Result<Vec<f64>, String> {
+        match ffi::decompress_column_part_f64(
+            self.btr_path
+                .to_str()
+                .expect("must be a valid path")
+                .to_string(),
+            column_index,
+            part_index,
         ) {
             Ok(vec) => Ok(vec),
             Err(err) => Err(err.to_string()),
