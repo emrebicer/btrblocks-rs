@@ -234,7 +234,7 @@ impl DecompressedColumnCache {
     }
 }
 
-/// A `stream` that reads btr data part by part
+/// A `stream` that reads btr and decompresses data part by part on each poll
 struct BtrChunkedStream {
     btr: Btr,
     schema_ref: SchemaRef,
