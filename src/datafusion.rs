@@ -1,31 +1,28 @@
 use core::fmt;
 use std::any::Any;
+use std::cmp::{max, min};
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::task::Poll;
 
 use crate::Btr;
 use crate::ColumnType;
-use datafusion::arrow::array::Array;
-use datafusion::arrow::array::Float64Builder;
-use datafusion::arrow::array::Int32Builder;
-use datafusion::arrow::array::RecordBatch;
-use datafusion::arrow::array::StringBuilder;
+use async_trait::async_trait;
+use datafusion::arrow::array::{Array, Float64Builder, Int32Builder, RecordBatch, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::Result;
-use datafusion::execution::TaskContext;
-use datafusion::physical_plan::memory::MemoryStream;
+use datafusion::execution::{RecordBatchStream, TaskContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
     SendableRecordBatchStream,
 };
-
-use async_trait::async_trait;
-use datafusion::catalog::Session;
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use futures::stream::Stream;
 
 #[derive(Debug, Clone)]
 pub struct BtrBlocksDataSource {
@@ -141,92 +138,215 @@ impl ExecutionPlan for BtrBlocksExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        // Get the metadata
         let meta = self.data_source.btr.file_metadata();
+        let column_count = max(meta.parts.len(), 1);
 
-        // Vector to hold Arrow arrays for the columns
-        let mut data_vec: Vec<Arc<dyn Array>> = vec![];
+        // Return a chunked stream to keep memory usage low
+        return Ok(Box::pin(BtrChunkedStream::new(
+            self.schema().clone(),
+            self.data_source.btr.clone(),
+            1000000 / column_count,
+        )));
+    }
+}
 
-        for (col_index, part_info) in meta.parts.iter().enumerate() {
-            match part_info.r#type {
-                ColumnType::Integer => {
-                    let mut vec = Vec::new();
-                    for part_index in 0..part_info.num_parts {
-                        vec.append(
-                            &mut self
-                                .data_source
-                                .btr
-                                .decompress_column_part_i32(col_index as u32, part_index)
-                                .expect("decompression should not fail"),
-                        );
-                    }
+enum TypedCache {
+    Int(Vec<i32>),
+    Float(Vec<f64>),
+    String(Vec<String>),
+}
 
-                    // Read the decompressed values into an Arrow array
-                    let mut builder = Int32Builder::new();
+struct DecompressedColumnCache {
+    column_index: usize,
+    num_parts: usize,
+    next_part_index_to_read: usize,
+    cached_data: TypedCache,
+}
 
-                    for val in vec {
-                        builder.append_value(val);
-                    }
+impl DecompressedColumnCache {
+    /// Checks if all data is consumed from this cache
+    fn finished(&self) -> bool {
+        // Check if there is more data on the existing cache
+        let empty = match &self.cached_data {
+            TypedCache::Int(vec) => vec.is_empty(),
+            TypedCache::Float(vec) => vec.is_empty(),
+            TypedCache::String(vec) => vec.is_empty(),
+        };
 
-                    // Finalize the array and add it to the vector
-                    data_vec.push(Arc::new(builder.finish()));
+        if !empty {
+            return false;
+        }
+
+        // Check if there is more partitions to read from
+        return self.done_reading_all_parts();
+    }
+
+    fn read_next_part(&mut self, btr: &Btr) {
+        if !self.done_reading_all_parts() {
+            match &mut self.cached_data {
+                TypedCache::Int(vec) => {
+                    // TODO: consider returning a result instead of expect...
+                    let mut new_data = btr
+                        .decompress_column_part_i32(
+                            self.column_index as u32,
+                            self.next_part_index_to_read as u32,
+                        )
+                        .expect("decompression should not fail");
+
+                    vec.append(&mut new_data);
                 }
-                ColumnType::Double => {
-                    let mut vec = Vec::new();
-                    for part_index in 0..part_info.num_parts {
-                        vec.append(
-                            &mut self
-                                .data_source
-                                .btr
-                                .decompress_column_part_f64(col_index as u32, part_index)
-                                .expect("decompression should not fail"),
-                        );
-                    }
+                TypedCache::Float(vec) => {
+                    let mut new_data = btr
+                        .decompress_column_part_f64(
+                            self.column_index as u32,
+                            self.next_part_index_to_read as u32,
+                        )
+                        .expect("decompression should not fail");
 
-                    // Read the decompressed values into an Arrow array
-                    let mut builder = Float64Builder::new(); // For UInt32 column
-
-                    for val in vec {
-                        builder.append_value(val);
-                    }
-
-                    // Finalize the array and add it to the vector
-                    data_vec.push(Arc::new(builder.finish()));
+                    vec.append(&mut new_data);
                 }
-                ColumnType::String => {
-                    let mut vec = Vec::new();
-                    for part_index in 0..part_info.num_parts {
-                        vec.append(
-                            &mut self
-                                .data_source
-                                .btr
-                                .decompress_column_part_string(col_index as u32, part_index)
-                                .expect("decompression should not fail"),
-                        );
-                    }
+                TypedCache::String(vec) => {
+                    let mut new_data = btr
+                        .decompress_column_part_string(
+                            self.column_index as u32,
+                            self.next_part_index_to_read as u32,
+                        )
+                        .expect("decompression should not fail");
 
-                    // Read the decompressed values into an Arrow array
-                    let mut builder = StringBuilder::new(); // For UInt32 column
-
-                    for val in vec {
-                        builder.append_value(val);
-                    }
-
-                    // Finalize the array and add it to the vector
-                    data_vec.push(Arc::new(builder.finish()));
+                    vec.append(&mut new_data);
                 }
+            };
+
+            self.next_part_index_to_read += 1;
+        }
+    }
+
+    fn current_cache_len(&self) -> usize {
+        match &self.cached_data {
+            TypedCache::Int(vec) => vec.len(),
+            TypedCache::Float(vec) => vec.len(),
+            TypedCache::String(vec) => vec.len(),
+        }
+    }
+
+    fn done_reading_all_parts(&self) -> bool {
+        self.next_part_index_to_read > self.num_parts - 1
+    }
+}
+
+/// A `stream` that reads btr data part by part
+struct BtrChunkedStream {
+    btr: Btr,
+    schema_ref: SchemaRef,
+    column_caches: Vec<DecompressedColumnCache>,
+    num_rows_per_poll: usize,
+}
+
+impl BtrChunkedStream {
+    fn new(schema_ref: SchemaRef, btr: Btr, num_rows_per_poll: usize) -> Self {
+        let mut column_caches = vec![];
+        let mut counter = 0;
+
+        for field in btr.file_metadata().parts {
+            let vec = match field.r#type {
+                ColumnType::Integer => TypedCache::Int(vec![]),
+                ColumnType::Double => TypedCache::Float(vec![]),
+                ColumnType::String => TypedCache::String(vec![]),
                 _ => {
-                    unimplemented!("Column type not supported");
+                    panic!("unexpected type, TODO: refactor into result");
+                }
+            };
+
+            let cache = DecompressedColumnCache {
+                column_index: counter,
+                num_parts: field.num_parts as usize,
+                next_part_index_to_read: 0,
+                cached_data: vec,
+            };
+            column_caches.push(cache);
+            counter += 1;
+        }
+
+        Self {
+            btr,
+            schema_ref,
+            column_caches,
+            num_rows_per_poll,
+        }
+    }
+}
+
+impl RecordBatchStream for BtrChunkedStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema_ref.clone()
+    }
+}
+
+impl Stream for BtrChunkedStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let mut data_vec: Vec<Arc<dyn Array>> = vec![];
+        let nrpp = self.num_rows_per_poll.clone();
+        let btr = self.btr.clone();
+
+        for column in &mut self.column_caches {
+            if column.finished() {
+                for inner_column in &mut self.column_caches {
+                    if !inner_column.finished() {
+                        // The columns should be all finished at the same time, if there is a
+                        // mismatch it means the data is corrupted  (some columns have different
+                        // number of elements), so return an execution error
+                        return Poll::Ready(Some(Err(datafusion::common::error::DataFusionError::Execution(format!("A columns is finished and all elements are consumed, however the column with index {} is not finished, most likely the data is corrupted.", inner_column.column_index).to_string()))));
+                    }
+                }
+
+                // All columns are finished, return None to hint the strem is done and shold not be
+                // polled anymore
+                return Poll::Ready(None);
+            }
+
+            // Read next part until last part is read, or until there are enough elements to be
+            // consumed
+            while column.current_cache_len() < nrpp && !column.done_reading_all_parts() {
+                column.read_next_part(&btr);
+            }
+
+            // Now consume the data for the stream
+            let num_elements_to_consume = min(column.current_cache_len(), nrpp);
+
+            match &mut column.cached_data {
+                TypedCache::Int(vec) => {
+                    let mut builder = Int32Builder::new();
+                    let to_consumed = vec.drain(0..num_elements_to_consume);
+                    for el in to_consumed {
+                        builder.append_value(el);
+                    }
+                    data_vec.push(Arc::new(builder.finish()));
+                }
+                TypedCache::Float(vec) => {
+                    let mut builder = Float64Builder::new();
+                    let to_consumed = vec.drain(0..num_elements_to_consume);
+                    for el in to_consumed {
+                        builder.append_value(el);
+                    }
+                    data_vec.push(Arc::new(builder.finish()));
+                }
+                TypedCache::String(vec) => {
+                    let mut builder = StringBuilder::new();
+                    let to_consumed = vec.drain(0..num_elements_to_consume);
+                    for el in to_consumed {
+                        builder.append_value(el);
+                    }
+                    data_vec.push(Arc::new(builder.finish()));
                 }
             }
         }
 
-        // Create a single RecordBatch from the data and schema
-        let schema: SchemaRef = self.schema();
-
-        let batch = RecordBatch::try_new(schema.clone(), data_vec)?;
-
-        // Wrap the batch in a MemoryStream
-        Ok(Box::pin(MemoryStream::try_new(vec![batch], schema, None)?))
+        let batch = RecordBatch::try_new(self.schema().clone(), data_vec)?;
+        Poll::Ready(Some(Ok(batch)))
     }
 }

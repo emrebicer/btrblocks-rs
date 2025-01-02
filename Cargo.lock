@@ -495,6 +495,7 @@ dependencies = [
  "datafusion",
  "datafusion-expr",
  "datafusion-physical-expr",
+ "futures",
  "git2",
  "num",
  "rand",

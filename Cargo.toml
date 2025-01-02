@@ -17,6 +17,7 @@ datafusion-expr = { version = "43.0.0" }
 datafusion-physical-expr = { version = "43.0.0" }
 async-trait = { version = "0.1.41" }
 serde = { version = "1.0", features = ["derive"]}
+futures = "0.3.31"
 
 # Optional dependencies for the binary target
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"], optional = true }
