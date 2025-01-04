@@ -51,10 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ctx = SessionContext::new();
 
             let custom_table_provider = btrblocks_rs::datafusion::BtrBlocksDataSource::new(
-                PathBuf::from_str(btr_path.as_str()).unwrap(),
+                PathBuf::from_str(btr_path.as_str())?,
             );
-            ctx.register_table("btr", Arc::new(custom_table_provider))
-                .unwrap();
+            ctx.register_table("btr", Arc::new(custom_table_provider))?;
             let df = ctx.sql(sql.as_str()).await?;
             df.show().await?;
         }

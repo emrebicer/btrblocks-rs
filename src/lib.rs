@@ -1,10 +1,13 @@
 // TODO: add tests for column decompressions to file
 // TODO: add  tests for datafusion sql query impl
 mod btrblocks;
+mod error;
 pub mod datafusion;
 mod ffi;
 
 pub use btrblocks::*;
+
+pub type Result<T> = std::result::Result<T, error::BtrBlocksError>;
 
 #[cfg(test)]
 mod tests {
@@ -112,7 +115,7 @@ mod tests {
             let btr_temp_dir = TempDir::new().unwrap();
             let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
 
-            let meta = btr.file_metadata();
+            let meta = btr.file_metadata().unwrap();
 
             for (col_index, part_info) in meta.parts.iter().enumerate() {
                 match part_info.r#type {

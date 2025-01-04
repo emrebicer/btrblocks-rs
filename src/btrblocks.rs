@@ -1,3 +1,4 @@
+use crate::{error::BtrBlocksError, Result};
 use serde::Deserialize;
 use std::path::PathBuf;
 use temp_dir::TempDir;
@@ -45,9 +46,9 @@ pub enum LogLevel {
     Off,
 }
 
-impl Into<i32> for LogLevel {
-    fn into(self) -> i32 {
-        match self {
+impl From<LogLevel> for i32 {
+    fn from(val: LogLevel) -> Self {
+        match val {
             LogLevel::Trace => 0,
             LogLevel::Debug => 1,
             LogLevel::Info => 2,
@@ -88,9 +89,9 @@ impl From<u32> for ColumnType {
     }
 }
 
-impl Into<String> for ColumnType {
-    fn into(self) -> String {
-        match self {
+impl From<ColumnType> for String {
+    fn from(val: ColumnType) -> String {
+        match val {
             ColumnType::Integer => "integer".to_string(),
             ColumnType::Double => "double".to_string(),
             ColumnType::String => "string".to_string(),
@@ -112,33 +113,40 @@ pub struct FileMetadata {
 
 impl FileMetadata {
     /// Get the BtrBlocks metadata from the given btr path
-    pub fn from_btr_path(mut btr_path: PathBuf) -> Self {
+    pub fn from_btr_path(mut btr_path: PathBuf) -> Result<Self> {
         // TODO: Should be a result
         btr_path.push("metadata");
-        let path_str = btr_path.to_str().expect("must be a valid path").to_string();
+        let path_str = btr_path
+            .to_str()
+            .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
+            .to_string();
         let raw_metadata: Vec<u32> = ffi::get_file_metadata(path_str);
 
         let mut it = raw_metadata.iter();
 
-        let num_columns = it.next().expect("num_columns must exists in the data");
-        let num_chunks = it.next().expect("num_chunks must exists in the data");
+        let num_columns = it.next().ok_or(BtrBlocksError::Metadata(
+            "num_columns must exists in the data".to_string(),
+        ))?;
+        let num_chunks = it.next().ok_or(BtrBlocksError::Metadata(
+            "num_chunks must exists in the data".to_string(),
+        ))?;
 
         let mut parts = vec![];
         while let Some(part_type) = it.next() {
-            let num_parts = it
-                .next()
-                .expect("if there is a part_type, there also must be the num_parts");
+            let num_parts = it.next().ok_or(BtrBlocksError::Metadata(
+                "if there is a part_type, there also must be the num_parts".to_string(),
+            ))?;
             parts.push(ColumnPartInfo {
                 r#type: (*part_type).into(),
                 num_parts: *num_parts,
             });
         }
 
-        FileMetadata {
+        Ok(FileMetadata {
             num_columns: *num_columns,
             num_chunks: *num_chunks,
             parts,
-        }
+        })
     }
 }
 
@@ -150,6 +158,12 @@ pub struct ColumnPartInfo {
 
 pub struct Relation {
     inner: *mut ffi::Relation,
+}
+
+impl Default for Relation {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Relation {
@@ -309,9 +323,12 @@ impl Btr {
 
     /// Construct a Btr object from an existing CSV file by compressing it
     /// `btr_path` is the target path for the BtrBlocks compressed file output
-    pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self, String> {
-        let bin_temp_dir =
-            TempDir::new().expect("should not fail to create a temp dir for binary data");
+    pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self> {
+        let bin_temp_dir = TempDir::new().map_err(|err| {
+            BtrBlocksError::Custom(
+                format!("failed to create a temp dir for binary data: {}", err).to_string(),
+            )
+        })?;
 
         let mut schema_data_vec = vec![];
         for column in schema.columns {
@@ -322,27 +339,27 @@ impl Btr {
         match ffi::csv_to_btr(
             csv_path
                 .to_str()
-                .expect("should be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             btr_path
                 .to_str()
-                .expect("should be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             format!(
                 "{}/",
                 bin_temp_dir
                     .path()
                     .to_str()
-                    .expect("should be a valid path")
+                    .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
             ),
             schema_data_vec,
         ) {
             Ok(_) => Ok(Self { btr_path }),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn file_metadata(&self) -> FileMetadata {
+    pub fn file_metadata(&self) -> Result<FileMetadata> {
         FileMetadata::from_btr_path(self.btr_path.clone())
     }
 
@@ -350,33 +367,33 @@ impl Btr {
         &self,
         column_index: u32,
         output_path: PathBuf,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         match ffi::decompress_column_into_file(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
             output_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
         ) {
             Ok(_) => Ok(()),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn decompress_column_i32(&self, column_index: u32) -> Result<Vec<i32>, String> {
+    pub fn decompress_column_i32(&self, column_index: u32) -> Result<Vec<i32>> {
         match ffi::decompress_column_i32(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
         ) {
             Ok(vec) => Ok(vec),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
@@ -384,30 +401,30 @@ impl Btr {
         &self,
         column_index: u32,
         part_index: u32,
-    ) -> Result<Vec<i32>, String> {
+    ) -> Result<Vec<i32>> {
         match ffi::decompress_column_part_i32(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
             part_index,
         ) {
             Ok(vec) => Ok(vec),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn decompress_column_string(&self, column_index: u32) -> Result<Vec<String>, String> {
+    pub fn decompress_column_string(&self, column_index: u32) -> Result<Vec<String>> {
         match ffi::decompress_column_string(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
         ) {
             Ok(vec) => Ok(vec),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
@@ -415,30 +432,30 @@ impl Btr {
         &self,
         column_index: u32,
         part_index: u32,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<Vec<String>> {
         match ffi::decompress_column_part_string(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
             part_index,
         ) {
             Ok(vec) => Ok(vec),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn decompress_column_f64(&self, column_index: u32) -> Result<Vec<f64>, String> {
+    pub fn decompress_column_f64(&self, column_index: u32) -> Result<Vec<f64>> {
         match ffi::decompress_column_f64(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
         ) {
             Ok(vec) => Ok(vec),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
@@ -446,17 +463,17 @@ impl Btr {
         &self,
         column_index: u32,
         part_index: u32,
-    ) -> Result<Vec<f64>, String> {
+    ) -> Result<Vec<f64>> {
         match ffi::decompress_column_part_f64(
             self.btr_path
                 .to_str()
-                .expect("must be a valid path")
+                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
             column_index,
             part_index,
         ) {
             Ok(vec) => Ok(vec),
-            Err(err) => Err(err.to_string()),
+            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 }

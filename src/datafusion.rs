@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::task::Poll;
 
+use crate::error::BtrBlocksError;
 use crate::Btr;
 use crate::ColumnType;
 use async_trait::async_trait;
@@ -14,7 +15,7 @@ use datafusion::arrow::array::{Array, Float64Builder, Int32Builder, RecordBatch,
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::error::Result;
+use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::{RecordBatchStream, TaskContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionMode, ExecutionPlan, PlanProperties,
@@ -47,11 +48,13 @@ impl TableProvider for BtrBlocksDataSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        let file_metadata = self.btr.file_metadata();
+        let file_metadata = self
+            .btr
+            .file_metadata()
+            .expect("failed to get the filemetadata for btr");
         let mut fields = vec![];
 
-        let mut counter = 0;
-        for column in file_metadata.parts {
+        for (counter, column) in file_metadata.parts.into_iter().enumerate() {
             let data_type = match column.r#type {
                 ColumnType::Integer => DataType::Int32,
                 ColumnType::Double => DataType::Float64,
@@ -62,7 +65,6 @@ impl TableProvider for BtrBlocksDataSource {
             // NOTE: there is no way to get the actual column name, it does not exist in the
             // metadata
             fields.push(Field::new(format!("column_{counter}"), data_type, true));
-            counter += 1;
         }
 
         SchemaRef::new(Schema::new(fields))
@@ -138,15 +140,22 @@ impl ExecutionPlan for BtrBlocksExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let meta = self.data_source.btr.file_metadata();
+        let meta = self
+            .data_source
+            .btr
+            .file_metadata()
+            .expect("failed to get the filemetadata for btr");
         let column_count = max(meta.parts.len(), 1);
 
         // Return a chunked stream to keep memory usage low
-        return Ok(Box::pin(BtrChunkedStream::new(
-            self.schema().clone(),
-            self.data_source.btr.clone(),
-            1000000 / column_count,
-        )));
+        Ok(Box::pin(
+            BtrChunkedStream::new(
+                self.schema().clone(),
+                self.data_source.btr.clone(),
+                1000000 / column_count,
+            )
+            .map_err(|err| DataFusionError::External(Box::new(err)))?,
+        ))
     }
 }
 
@@ -178,40 +187,33 @@ impl DecompressedColumnCache {
         }
 
         // Check if there is more partitions to read from
-        return self.done_reading_all_parts();
+        self.done_reading_all_parts()
     }
 
-    fn read_next_part(&mut self, btr: &Btr) {
+    fn read_next_part(&mut self, btr: &Btr) -> crate::Result<()> {
         if !self.done_reading_all_parts() {
             match &mut self.cached_data {
                 TypedCache::Int(vec) => {
-                    // TODO: consider returning a result instead of expect...
-                    let mut new_data = btr
-                        .decompress_column_part_i32(
-                            self.column_index as u32,
-                            self.next_part_index_to_read as u32,
-                        )
-                        .expect("decompression should not fail");
+                    let mut new_data = btr.decompress_column_part_i32(
+                        self.column_index as u32,
+                        self.next_part_index_to_read as u32,
+                    )?;
 
                     vec.append(&mut new_data);
                 }
                 TypedCache::Float(vec) => {
-                    let mut new_data = btr
-                        .decompress_column_part_f64(
-                            self.column_index as u32,
-                            self.next_part_index_to_read as u32,
-                        )
-                        .expect("decompression should not fail");
+                    let mut new_data = btr.decompress_column_part_f64(
+                        self.column_index as u32,
+                        self.next_part_index_to_read as u32,
+                    )?;
 
                     vec.append(&mut new_data);
                 }
                 TypedCache::String(vec) => {
-                    let mut new_data = btr
-                        .decompress_column_part_string(
-                            self.column_index as u32,
-                            self.next_part_index_to_read as u32,
-                        )
-                        .expect("decompression should not fail");
+                    let mut new_data = btr.decompress_column_part_string(
+                        self.column_index as u32,
+                        self.next_part_index_to_read as u32,
+                    )?;
 
                     vec.append(&mut new_data);
                 }
@@ -219,6 +221,8 @@ impl DecompressedColumnCache {
 
             self.next_part_index_to_read += 1;
         }
+
+        Ok(())
     }
 
     fn current_cache_len(&self) -> usize {
@@ -243,17 +247,18 @@ struct BtrChunkedStream {
 }
 
 impl BtrChunkedStream {
-    fn new(schema_ref: SchemaRef, btr: Btr, num_rows_per_poll: usize) -> Self {
+    fn new(schema_ref: SchemaRef, btr: Btr, num_rows_per_poll: usize) -> crate::Result<Self> {
         let mut column_caches = vec![];
-        let mut counter = 0;
 
-        for field in btr.file_metadata().parts {
+        for (counter, field) in btr.file_metadata()?.parts.into_iter().enumerate() {
             let vec = match field.r#type {
                 ColumnType::Integer => TypedCache::Int(vec![]),
                 ColumnType::Double => TypedCache::Float(vec![]),
                 ColumnType::String => TypedCache::String(vec![]),
                 _ => {
-                    panic!("unexpected type, TODO: refactor into result");
+                    return Err(BtrBlocksError::UnexpectedType(Into::<String>::into(
+                        field.r#type,
+                    )));
                 }
             };
 
@@ -264,15 +269,14 @@ impl BtrChunkedStream {
                 cached_data: vec,
             };
             column_caches.push(cache);
-            counter += 1;
         }
 
-        Self {
+        Ok(Self {
             btr,
             schema_ref,
             column_caches,
             num_rows_per_poll,
-        }
+        })
     }
 }
 
@@ -290,7 +294,7 @@ impl Stream for BtrChunkedStream {
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut data_vec: Vec<Arc<dyn Array>> = vec![];
-        let nrpp = self.num_rows_per_poll.clone();
+        let nrpp = self.num_rows_per_poll;
         let btr = self.btr.clone();
 
         for column in &mut self.column_caches {
@@ -300,7 +304,7 @@ impl Stream for BtrChunkedStream {
                         // The columns should be all finished at the same time, if there is a
                         // mismatch it means the data is corrupted  (some columns have different
                         // number of elements), so return an execution error
-                        return Poll::Ready(Some(Err(datafusion::common::error::DataFusionError::Execution(format!("A columns is finished and all elements are consumed, however the column with index {} is not finished, most likely the data is corrupted.", inner_column.column_index).to_string()))));
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(format!("A columns is finished and all elements are consumed, however the column with index {} is not finished, most likely the data is corrupted.", inner_column.column_index).to_string()))));
                     }
                 }
 
@@ -312,7 +316,7 @@ impl Stream for BtrChunkedStream {
             // Read next part until last part is read, or until there are enough elements to be
             // consumed
             while column.current_cache_len() < nrpp && !column.done_reading_all_parts() {
-                column.read_next_part(&btr);
+                column.read_next_part(&btr).unwrap();
             }
 
             // Now consume the data for the stream
