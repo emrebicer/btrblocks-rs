@@ -37,6 +37,7 @@
               cargo
               rustc
               rust-analyzer
+              clippy
           ];
 
           LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];
