@@ -3,7 +3,6 @@ use std::any::Any;
 use std::cmp::{max, min};
 use std::fmt::Debug;
 use std::fmt::Formatter;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::task::Poll;
 
@@ -23,6 +22,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use futures::executor::block_on;
 use futures::stream::Stream;
 
 #[derive(Debug, Clone)]
@@ -31,9 +31,10 @@ pub struct BtrBlocksDataSource {
 }
 
 impl BtrBlocksDataSource {
-    pub fn new(btr_path: PathBuf) -> Self {
+    pub fn new(btr_url: String) -> Self {
         Self {
-            btr: Btr::from_path(btr_path),
+            btr: Btr::from_url(btr_url)
+                .expect("the URL should be a valid URL pointing to a btr compressed file"),
         }
     }
     pub(crate) async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -48,10 +49,9 @@ impl TableProvider for BtrBlocksDataSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        let file_metadata = self
-            .btr
-            .file_metadata()
-            .expect("failed to get the filemetadata for btr");
+        let file_metadata =
+            block_on(self.btr.file_metadata()).expect("get file metadata from given btr path");
+
         let mut fields = vec![];
 
         for (counter, column) in file_metadata.parts.into_iter().enumerate() {
@@ -140,20 +140,18 @@ impl ExecutionPlan for BtrBlocksExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let meta = self
-            .data_source
-            .btr
-            .file_metadata()
-            .expect("failed to get the filemetadata for btr");
+        let meta = block_on(self.data_source.btr.file_metadata())
+            .expect("get file metadata from given btr path");
+
         let column_count = max(meta.parts.len(), 1);
 
         // Return a chunked stream to keep memory usage low
         Ok(Box::pin(
-            BtrChunkedStream::new(
+            block_on(BtrChunkedStream::new(
                 self.schema().clone(),
                 self.data_source.btr.clone(),
-                1000000 / column_count,
-            )
+                1_000_000 / column_count,
+            ))
             .map_err(|err| DataFusionError::External(Box::new(err)))?,
         ))
     }
@@ -190,30 +188,36 @@ impl DecompressedColumnCache {
         self.done_reading_all_parts()
     }
 
-    fn read_next_part(&mut self, btr: &Btr) -> crate::Result<()> {
+    async fn read_next_part(&mut self, btr: &Btr) -> crate::Result<()> {
         if !self.done_reading_all_parts() {
             match &mut self.cached_data {
                 TypedCache::Int(vec) => {
-                    let mut new_data = btr.decompress_column_part_i32(
-                        self.column_index as u32,
-                        self.next_part_index_to_read as u32,
-                    )?;
+                    let mut new_data = btr
+                        .decompress_column_part_i32(
+                            self.column_index as u32,
+                            self.next_part_index_to_read as u32,
+                        )
+                        .await?;
 
                     vec.append(&mut new_data);
                 }
                 TypedCache::Float(vec) => {
-                    let mut new_data = btr.decompress_column_part_f64(
-                        self.column_index as u32,
-                        self.next_part_index_to_read as u32,
-                    )?;
+                    let mut new_data = btr
+                        .decompress_column_part_f64(
+                            self.column_index as u32,
+                            self.next_part_index_to_read as u32,
+                        )
+                        .await?;
 
                     vec.append(&mut new_data);
                 }
                 TypedCache::String(vec) => {
-                    let mut new_data = btr.decompress_column_part_string(
-                        self.column_index as u32,
-                        self.next_part_index_to_read as u32,
-                    )?;
+                    let mut new_data = btr
+                        .decompress_column_part_string(
+                            self.column_index as u32,
+                            self.next_part_index_to_read as u32,
+                        )
+                        .await?;
 
                     vec.append(&mut new_data);
                 }
@@ -247,10 +251,10 @@ struct BtrChunkedStream {
 }
 
 impl BtrChunkedStream {
-    fn new(schema_ref: SchemaRef, btr: Btr, num_rows_per_poll: usize) -> crate::Result<Self> {
+    async fn new(schema_ref: SchemaRef, btr: Btr, num_rows_per_poll: usize) -> crate::Result<Self> {
         let mut column_caches = vec![];
 
-        for (counter, field) in btr.file_metadata()?.parts.into_iter().enumerate() {
+        for (counter, field) in btr.file_metadata().await?.parts.into_iter().enumerate() {
             let vec = match field.r#type {
                 ColumnType::Integer => TypedCache::Int(vec![]),
                 ColumnType::Double => TypedCache::Float(vec![]),
@@ -316,7 +320,8 @@ impl Stream for BtrChunkedStream {
             // Read next part until last part is read, or until there are enough elements to be
             // consumed
             while column.current_cache_len() < nrpp && !column.done_reading_all_parts() {
-                column.read_next_part(&btr).unwrap();
+                block_on(column.read_next_part(&btr))
+                    .expect("should read next part without any errors");
             }
 
             // Now consume the data for the stream

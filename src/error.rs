@@ -10,6 +10,8 @@ pub enum BtrBlocksError {
     Path(String),
     #[error("an error occured on the BtrBlocks c++ library wrapper: `{0}`")]
     BtrBlocksLibWrapper(String),
+    #[error("Failed to parse given URL: `{0}`")]
+    Url(String),
     #[error("a custom error occured: `{0}`")]
     Custom(String),
 }

@@ -22,29 +22,39 @@ pub mod ffi {
         fn new_relation() -> *mut Relation;
         fn new_int_mmapvector(vec: &Vec<i32>) -> *mut IntMMapVector;
         fn new_double_mmapvector(vec: &Vec<f64>) -> *mut DoubleMMapVector;
-        fn get_file_metadata(btr_metadata_path: String) -> Vec<u32>;
-        fn decompress_column_into_file(
-            btr_path: String,
-            column_index: u32,
-            output_path: String,
-        ) -> Result<()>;
-        fn decompress_column_i32(btr_path: String, column_index: u32) -> Result<Vec<i32>>;
+        fn get_file_metadata(metadata_bytes: &Vec<u8>) -> Vec<u32>;
+        fn decompress_column_i32(
+            column_part_bytes: &Vec<u8>,
+            part_ending_indexes: &Vec<usize>,
+            num_chunks: u32,
+        ) -> Result<Vec<i32>>;
         fn decompress_column_part_i32(
-            btr_path: String,
+            part_bytes: &Vec<u8>,
+            metadata_bytes: &Vec<u8>,
             column_index: u32,
             part_index: u32,
         ) -> Result<Vec<i32>>;
 
-        fn decompress_column_string(btr_path: String, column_index: u32) -> Result<Vec<String>>;
+        fn decompress_column_string(
+            column_part_bytes: &Vec<u8>,
+            part_ending_indexes: &Vec<usize>,
+            num_chunks: u32,
+        ) -> Result<Vec<String>>;
         fn decompress_column_part_string(
-            btr_path: String,
+            part_bytes: &Vec<u8>,
+            metadata_bytes: &Vec<u8>,
             column_index: u32,
             part_index: u32,
         ) -> Result<Vec<String>>;
 
-        fn decompress_column_f64(btr_path: String, column_index: u32) -> Result<Vec<f64>>;
+        fn decompress_column_f64(
+            column_part_bytes: &Vec<u8>,
+            part_ending_indexes: &Vec<usize>,
+            num_chunks: u32,
+        ) -> Result<Vec<f64>>;
         fn decompress_column_part_f64(
-            btr_path: String,
+            part_bytes: &Vec<u8>,
+            metadata_bytes: &Vec<u8>,
             column_index: u32,
             part_index: u32,
         ) -> Result<Vec<f64>>;

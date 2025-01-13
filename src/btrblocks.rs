@@ -1,7 +1,9 @@
-use crate::{error::BtrBlocksError, Result};
+use crate::{error::BtrBlocksError, util::string_to_btr_url, Result};
+use object_store::{parse_url, ObjectStore};
 use serde::Deserialize;
 use std::path::PathBuf;
 use temp_dir::TempDir;
+use url::Url;
 
 use crate::ffi::ffi;
 
@@ -112,15 +114,30 @@ pub struct FileMetadata {
 }
 
 impl FileMetadata {
-    /// Get the BtrBlocks metadata from the given btr path
-    pub fn from_btr_path(mut btr_path: PathBuf) -> Result<Self> {
-        // TODO: Should be a result
-        btr_path.push("metadata");
-        let path_str = btr_path
-            .to_str()
-            .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-            .to_string();
-        let raw_metadata: Vec<u32> = ffi::get_file_metadata(path_str);
+    pub async fn bytes_from_btr_url(btr_url: Url) -> Result<Vec<u8>> {
+        let metadata_url = btr_url
+            .join("metadata")
+            .map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+        let (store, path) =
+            parse_url(&metadata_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+        let metadata_bytes = store
+            .get(&path)
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
+            .bytes()
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+        Ok(metadata_bytes.to_vec())
+    }
+
+    /// Get the BtrBlocks metadata from the given btr url
+    pub async fn from_btr_url(btr_url: Url) -> Result<Self> {
+        let metadata_bytes = FileMetadata::bytes_from_btr_url(btr_url).await?;
+
+        let raw_metadata: Vec<u32> = ffi::get_file_metadata(&metadata_bytes);
 
         let mut it = raw_metadata.iter();
 
@@ -312,18 +329,22 @@ impl Buffer {
 #[derive(Clone, Debug)]
 pub struct Btr {
     /// The path to the btrblocks compressed directory
-    btr_path: PathBuf,
+    btr_url: Url,
 }
 
 impl Btr {
     /// Construct a Btr object from an existing BtrBlocks compressed file
-    pub fn from_path(btr_path: PathBuf) -> Self {
-        Self { btr_path }
+    pub fn from_url(btr_url: String) -> Result<Self> {
+        let btr_url = string_to_btr_url(&mut btr_url.clone())?;
+        Ok(Self { btr_url })
     }
 
     /// Construct a Btr object from an existing CSV file by compressing it
     /// `btr_path` is the target path for the BtrBlocks compressed file output
+    /// Currently this function is only supported for local filesystem
     pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self> {
+        // TODO: refactor this to use object store as well, need to read csv here and pass in data
+        // to wrapper, (perhaps lines as string vector?)
         let bin_temp_dir = TempDir::new().map_err(|err| {
             BtrBlocksError::Custom(
                 format!("failed to create a temp dir for binary data: {}", err).to_string(),
@@ -336,15 +357,17 @@ impl Btr {
             schema_data_vec.push(column.r#type.into());
         }
 
+        let btr_path_str = btr_path
+            .to_str()
+            .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
+            .to_string();
+
         match ffi::csv_to_btr(
             csv_path
                 .to_str()
                 .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                 .to_string(),
-            btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
+            btr_path_str.clone(),
             format!(
                 "{}/",
                 bin_temp_dir
@@ -354,59 +377,75 @@ impl Btr {
             ),
             schema_data_vec,
         ) {
-            Ok(_) => Ok(Self { btr_path }),
+            Ok(_) => Btr::from_url(btr_path_str),
             Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn file_metadata(&self) -> Result<FileMetadata> {
-        FileMetadata::from_btr_path(self.btr_path.clone())
+    pub async fn file_metadata(&self) -> Result<FileMetadata> {
+        FileMetadata::from_btr_url(self.btr_url.clone()).await
     }
 
-    pub fn decompress_column_into_file(
-        &self,
-        column_index: u32,
-        output_path: PathBuf,
-    ) -> Result<()> {
-        match ffi::decompress_column_into_file(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
-            column_index,
-            output_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
-        ) {
-            Ok(_) => Ok(()),
-            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
+    async fn file_metadata_bytes(&self) -> Result<Vec<u8>> {
+        FileMetadata::bytes_from_btr_url(self.btr_url.clone()).await
+    }
+
+    async fn column_part_bytes(&self, column_index: u32, part_index: u32) -> Result<Vec<u8>> {
+        let column_part_url = self
+            .btr_url
+            .join(format!("column{}_part{}", column_index, part_index).as_str())
+            .map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+        let (store, path) =
+            parse_url(&column_part_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+        Ok(store
+            .get(&path)
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
+            .bytes()
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
+            .to_vec())
+    }
+
+    pub async fn decompress_column_i32(&self, column_index: u32) -> Result<Vec<i32>> {
+        let metadata = self.file_metadata().await?;
+
+        let mut compressed_data = vec![];
+        let mut part_ending_indexes = vec![];
+
+        for part_index in 0..metadata
+            .parts
+            .get(column_index as usize)
+            .ok_or(BtrBlocksError::Custom(format!(
+                "Column with index {column_index} does not exist"
+            )))?
+            .num_parts
+        {
+            let compressed_part = self.column_part_bytes(column_index, part_index).await?;
+            compressed_data.extend(compressed_part);
+            part_ending_indexes.push(compressed_data.len());
         }
-    }
 
-    pub fn decompress_column_i32(&self, column_index: u32) -> Result<Vec<i32>> {
         match ffi::decompress_column_i32(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
-            column_index,
+            &compressed_data,
+            &part_ending_indexes,
+            metadata.num_chunks,
         ) {
             Ok(vec) => Ok(vec),
             Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn decompress_column_part_i32(
+    pub async fn decompress_column_part_i32(
         &self,
         column_index: u32,
         part_index: u32,
     ) -> Result<Vec<i32>> {
         match ffi::decompress_column_part_i32(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
+            &self.column_part_bytes(column_index, part_index).await?,
+            &self.file_metadata_bytes().await?,
             column_index,
             part_index,
         ) {
@@ -415,29 +454,43 @@ impl Btr {
         }
     }
 
-    pub fn decompress_column_string(&self, column_index: u32) -> Result<Vec<String>> {
+    pub async fn decompress_column_string(&self, column_index: u32) -> Result<Vec<String>> {
+        let metadata = self.file_metadata().await?;
+
+        let mut compressed_data = vec![];
+        let mut part_ending_indexes = vec![];
+
+        for part_index in 0..metadata
+            .parts
+            .get(column_index as usize)
+            .ok_or(BtrBlocksError::Custom(format!(
+                "Column with index {column_index} does not exist"
+            )))?
+            .num_parts
+        {
+            let compressed_part = self.column_part_bytes(column_index, part_index).await?;
+            compressed_data.extend(compressed_part);
+            part_ending_indexes.push(compressed_data.len());
+        }
+
         match ffi::decompress_column_string(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
-            column_index,
+            &compressed_data,
+            &part_ending_indexes,
+            metadata.num_chunks,
         ) {
             Ok(vec) => Ok(vec),
             Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn decompress_column_part_string(
+    pub async fn decompress_column_part_string(
         &self,
         column_index: u32,
         part_index: u32,
     ) -> Result<Vec<String>> {
         match ffi::decompress_column_part_string(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
+            &self.column_part_bytes(column_index, part_index).await?,
+            &self.file_metadata_bytes().await?,
             column_index,
             part_index,
         ) {
@@ -446,29 +499,43 @@ impl Btr {
         }
     }
 
-    pub fn decompress_column_f64(&self, column_index: u32) -> Result<Vec<f64>> {
+    pub async fn decompress_column_f64(&self, column_index: u32) -> Result<Vec<f64>> {
+        let metadata = self.file_metadata().await?;
+
+        let mut compressed_data = vec![];
+        let mut part_ending_indexes = vec![];
+
+        for part_index in 0..metadata
+            .parts
+            .get(column_index as usize)
+            .ok_or(BtrBlocksError::Custom(format!(
+                "Column with index {column_index} does not exist"
+            )))?
+            .num_parts
+        {
+            let compressed_part = self.column_part_bytes(column_index, part_index).await?;
+            compressed_data.extend(compressed_part);
+            part_ending_indexes.push(compressed_data.len());
+        }
+
         match ffi::decompress_column_f64(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
-            column_index,
+            &compressed_data,
+            &part_ending_indexes,
+            metadata.num_chunks,
         ) {
             Ok(vec) => Ok(vec),
             Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
 
-    pub fn decompress_column_part_f64(
+    pub async fn decompress_column_part_f64(
         &self,
         column_index: u32,
         part_index: u32,
     ) -> Result<Vec<f64>> {
         match ffi::decompress_column_part_f64(
-            self.btr_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
+            &self.column_part_bytes(column_index, part_index).await?,
+            &self.file_metadata_bytes().await?,
             column_index,
             part_index,
         ) {
