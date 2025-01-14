@@ -1,3 +1,4 @@
+#[allow(clippy::module_inception)]
 #[cxx::bridge]
 pub mod ffi {
 

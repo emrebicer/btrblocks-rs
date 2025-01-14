@@ -31,6 +31,16 @@ enum Commands {
         #[arg(short, long)]
         schema_path: String,
     },
+    /// Decompress a btr file into CSV format
+    ToCsv {
+        /// Path to the CSV file to compress
+        #[arg(short, long)]
+        csv_path: String,
+
+        /// Output btr compressed file path
+        #[arg(short, long)]
+        btr_path: String,
+    },
     /// Run an SQL query on the given btr compressed file
     Query {
         #[arg(short, long)]
@@ -69,6 +79,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PathBuf::from_str(btr_path)?,
                 schema,
             )?;
+        }
+        Some(Commands::ToCsv { csv_path, btr_path }) => {
+            let btr = Btr::from_url(btr_path.to_string())?;
+            btr.write_to_csv(csv_path.to_string()).await?;
         }
         None => {}
     }

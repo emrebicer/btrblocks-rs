@@ -1,7 +1,15 @@
-use crate::{error::BtrBlocksError, util::string_to_btr_url, Result};
-use object_store::{parse_url, ObjectStore};
+use crate::{
+    datafusion::BtrChunkedStream,
+    error::BtrBlocksError,
+    util::{ensure_protocol, extract_value_as_string, string_to_btr_url},
+    Result,
+};
+use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::{array::Array, datatypes::Schema as ArrowSchema};
+use futures::StreamExt;
+use object_store::{parse_url, ObjectStore, WriteMultipart};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{cmp::max, path::PathBuf};
 use temp_dir::TempDir;
 use url::Url;
 
@@ -62,7 +70,7 @@ impl From<LogLevel> for i32 {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Copy, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum ColumnType {
     Integer = 0,
@@ -106,7 +114,7 @@ impl From<ColumnType> for String {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileMetadata {
     pub num_columns: u32,
     pub num_chunks: u32,
@@ -165,9 +173,36 @@ impl FileMetadata {
             parts,
         })
     }
+
+    pub fn to_schema_ref(&self) -> Result<SchemaRef> {
+        let mut fields = vec![];
+        let mut header_str = String::new();
+
+        let column_count = max(self.parts.len(), 1);
+
+        for (counter, column) in self.parts.iter().enumerate() {
+            let data_type = match column.r#type {
+                ColumnType::Integer => DataType::Int32,
+                ColumnType::Double => DataType::Float64,
+                ColumnType::String => DataType::Utf8,
+                _ => DataType::Null,
+            };
+
+            let field_name = format!("column_{counter}");
+
+            fields.push(Field::new(field_name.clone(), data_type, true));
+            header_str.push_str(field_name.as_str());
+
+            if counter + 1 < column_count {
+                header_str.push(',');
+            }
+        }
+
+        Ok(SchemaRef::new(ArrowSchema::new(fields)))
+    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct ColumnPartInfo {
     pub r#type: ColumnType,
     pub num_parts: u32,
@@ -380,6 +415,77 @@ impl Btr {
             Ok(_) => Btr::from_url(btr_path_str),
             Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
+    }
+
+    /// Decompressed the btr file and writes the resulting CSV to the
+    /// given `target_url`
+    pub async fn write_to_csv(&self, target_url: String) -> Result<()> {
+        let mut target_url = target_url.clone();
+        ensure_protocol(&mut target_url);
+        let target_url =
+            Url::parse(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+        // Create the csv header text
+        let file_metadata = self.file_metadata().await?;
+        let column_count = max(file_metadata.parts.len(), 1);
+        let mut header_str = String::new();
+
+        for counter in 0..file_metadata.parts.len() {
+            let field_name = format!("column_{counter}");
+            header_str.push_str(field_name.as_str());
+
+            if counter + 1 < column_count {
+                header_str.push(',');
+            }
+        }
+
+        // Create the schema ref for the chunked stream
+        let schema_ref = file_metadata.to_schema_ref()?;
+
+        // Create the ChunkedStream to read decompresssed data by parts
+        let mut stream =
+            BtrChunkedStream::new(schema_ref, self.clone(), 1_000_000 / column_count).await?;
+
+        let (store, path) =
+            parse_url(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+        let upload = store.put_multipart(&path).await.unwrap();
+        let mut write = WriteMultipart::new(upload);
+
+        // Write the header row to the target
+        write.write(header_str.as_bytes());
+
+        // Write the rows data in batches
+        while let Some(batch) = stream.next().await {
+            let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+            let num_rows = batch.num_rows();
+            let num_columns = batch.num_columns();
+
+            let columns: Vec<&dyn Array> = (0..num_columns)
+                .map(|col_index| batch.column(col_index).as_ref())
+                .collect();
+
+            for row_index in 0..num_rows {
+                write.write("\n".as_bytes());
+
+                for (counter, column) in columns.iter().enumerate() {
+                    let value = extract_value_as_string(*column, row_index);
+                    write.write(value.as_bytes());
+
+                    if counter + 1 < column_count {
+                        write.write(",".as_bytes());
+                    }
+                }
+            }
+        }
+
+        // Finish writing
+        write
+            .finish()
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+        Ok(())
     }
 
     pub async fn file_metadata(&self) -> Result<FileMetadata> {

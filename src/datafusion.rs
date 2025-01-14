@@ -11,7 +11,7 @@ use crate::Btr;
 use crate::ColumnType;
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, Float64Builder, Int32Builder, RecordBatch, StringBuilder};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
 use datafusion::error::{DataFusionError, Result};
@@ -52,22 +52,9 @@ impl TableProvider for BtrBlocksDataSource {
         let file_metadata =
             block_on(self.btr.file_metadata()).expect("get file metadata from given btr path");
 
-        let mut fields = vec![];
-
-        for (counter, column) in file_metadata.parts.into_iter().enumerate() {
-            let data_type = match column.r#type {
-                ColumnType::Integer => DataType::Int32,
-                ColumnType::Double => DataType::Float64,
-                ColumnType::String => DataType::Utf8,
-                _ => DataType::Null,
-            };
-
-            // NOTE: there is no way to get the actual column name, it does not exist in the
-            // metadata
-            fields.push(Field::new(format!("column_{counter}"), data_type, true));
-        }
-
-        SchemaRef::new(Schema::new(fields))
+        file_metadata
+            .to_schema_ref()
+            .expect("get schema ref from file metadata")
     }
 
     fn table_type(&self) -> TableType {
@@ -243,7 +230,7 @@ impl DecompressedColumnCache {
 }
 
 /// A `stream` that reads btr and decompresses data part by part on each poll
-struct BtrChunkedStream {
+pub struct BtrChunkedStream {
     btr: Btr,
     schema_ref: SchemaRef,
     column_caches: Vec<DecompressedColumnCache>,
@@ -251,7 +238,11 @@ struct BtrChunkedStream {
 }
 
 impl BtrChunkedStream {
-    async fn new(schema_ref: SchemaRef, btr: Btr, num_rows_per_poll: usize) -> crate::Result<Self> {
+    pub async fn new(
+        schema_ref: SchemaRef,
+        btr: Btr,
+        num_rows_per_poll: usize,
+    ) -> crate::Result<Self> {
         let mut column_caches = vec![];
 
         for (counter, field) in btr.file_metadata().await?.parts.into_iter().enumerate() {
