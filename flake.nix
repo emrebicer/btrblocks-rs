@@ -38,6 +38,7 @@
               rustc
               rust-analyzer
               clippy
+              fuse3
           ];
 
           LIBCLANG_PATH = pkgs.lib.makeLibraryPath [ pkgs.llvmPackages_latest.libclang.lib ];

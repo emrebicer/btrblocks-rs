@@ -1,11 +1,13 @@
 use crate::{
     datafusion::BtrChunkedStream,
     error::BtrBlocksError,
+    mount::BtrBlocksFs,
     util::{ensure_protocol, extract_value_as_string, string_to_btr_url},
     Result,
 };
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::arrow::{array::Array, datatypes::Schema as ArrowSchema};
+use fuser::{BackgroundSession, MountOption};
 use futures::StreamExt;
 use object_store::{parse_url, ObjectStore, WriteMultipart};
 use serde::Deserialize;
@@ -486,6 +488,67 @@ impl Btr {
             .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
 
         Ok(())
+    }
+
+    /// Create a mount point and make the decompresssed CSV file accessible there
+    pub async fn mount_csv(
+        &self,
+        mount_point: String,
+        mount_options: &mut Vec<MountOption>,
+    ) -> Result<BackgroundSession> {
+        // Decompress into csv and keep the result in memory
+        let mut raw_csv_data = String::new();
+
+        // Create the csv header text
+        let file_metadata = self.file_metadata().await?;
+        let column_count = max(file_metadata.parts.len(), 1);
+        let mut header_str = String::new();
+
+        for counter in 0..file_metadata.parts.len() {
+            let field_name = format!("column_{counter}");
+            header_str.push_str(field_name.as_str());
+
+            if counter + 1 < column_count {
+                header_str.push(',');
+            }
+        }
+
+        // Create the schema ref for the chunked stream
+        let schema_ref = file_metadata.to_schema_ref()?;
+
+        // Create the ChunkedStream to read decompresssed data by parts
+        let mut stream =
+            BtrChunkedStream::new(schema_ref, self.clone(), 1_000_000 / column_count).await?;
+
+        // Write the header row to the target
+        raw_csv_data.push_str(header_str.as_str());
+
+        // Write the rows data in batches
+        while let Some(batch) = stream.next().await {
+            let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+            let num_rows = batch.num_rows();
+            let num_columns = batch.num_columns();
+
+            let columns: Vec<&dyn Array> = (0..num_columns)
+                .map(|col_index| batch.column(col_index).as_ref())
+                .collect();
+
+            for row_index in 0..num_rows {
+                raw_csv_data.push('\n');
+
+                for (counter, column) in columns.iter().enumerate() {
+                    let value = extract_value_as_string(*column, row_index);
+                    raw_csv_data.push_str(&value.to_string());
+
+                    if counter + 1 < column_count {
+                        raw_csv_data.push(',');
+                    }
+                }
+            }
+        }
+
+        let btr_fs = BtrBlocksFs::new(raw_csv_data);
+        btr_fs.mount(mount_point, mount_options)
     }
 
     pub async fn file_metadata(&self) -> Result<FileMetadata> {

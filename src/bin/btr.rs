@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use btrblocks_rs::{Btr, Schema};
 use clap::{Parser, Subcommand};
@@ -50,6 +52,15 @@ enum Commands {
         #[arg(short, long)]
         sql: String,
     },
+    /// Mount a new file system with fuse and put the decompressed csv file there
+    MountCsv {
+        #[arg(short, long)]
+        btr_path: String,
+
+        /// The path to mount the file system, the resulting csv can be found under this path
+        #[arg(short, long)]
+        mount_point: String,
+    },
 }
 
 #[tokio::main]
@@ -83,6 +94,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::ToCsv { csv_path, btr_path }) => {
             let btr = Btr::from_url(btr_path.to_string())?;
             btr.write_to_csv(csv_path.to_string()).await?;
+        }
+        Some(Commands::MountCsv {
+            mount_point,
+            btr_path,
+        }) => {
+            let btr = Btr::from_url(btr_path.to_string())?;
+            let _res = btr.mount_csv(mount_point.to_string(), &mut vec![]).await?;
+
+            // Don't kill the program to keep the file system mounted
+            // unless forcefully killed
+            loop {
+                sleep(Duration::from_secs(1));
+            }
         }
         None => {}
     }

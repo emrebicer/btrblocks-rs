@@ -12,6 +12,8 @@ pub enum BtrBlocksError {
     BtrBlocksLibWrapper(String),
     #[error("Failed to parse given URL: `{0}`")]
     Url(String),
+    #[error("an error occured while mounting with fuse: `{0}`")]
+    Mount(String),
     #[error("a custom error occured: `{0}`")]
     Custom(String),
 }
