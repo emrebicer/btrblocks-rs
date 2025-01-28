@@ -12,12 +12,16 @@ use crate::Result;
 
 const TTL: Duration = Duration::from_secs(1);
 
-pub struct BtrBlocksFs {
+/// This file system implementation will decompress the btr file into a csv file and make the whole
+/// decompressed data available on the mounted fs under data.csv file, it will be faster to access
+/// the file once it is decompressed but since the decompressed contents will be stored in memory
+/// the memory consumption will be high for large files
+pub struct BtrBlocksOneShotFs {
     raw_csv_data: String,
     ino_to_file: HashMap<u64, (FileType, String)>,
 }
 
-impl BtrBlocksFs {
+impl BtrBlocksOneShotFs {
     pub fn new(raw_csv_data: String) -> Self {
         Self {
             raw_csv_data,
@@ -57,7 +61,7 @@ impl BtrBlocksFs {
         let mut options = vec![
             MountOption::RO,
             MountOption::NoExec,
-            MountOption::FSName("BtrBlocksFs".to_string()),
+            MountOption::FSName("BtrBlocksOneShotFs".to_string()),
         ];
         options.append(mount_options);
         // if matches.get_flag("auto_unmount") {
@@ -73,7 +77,7 @@ impl BtrBlocksFs {
     }
 }
 
-impl Filesystem for BtrBlocksFs {
+impl Filesystem for BtrBlocksOneShotFs {
     fn lookup(&mut self, _req: &Request, parent: u64, name: &OsStr, reply: ReplyEntry) {
         if parent == 1 && name.to_str() == Some("data.csv") {
             reply.entry(&TTL, &self.csv_file_attr(), 0);

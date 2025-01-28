@@ -60,6 +60,11 @@ enum Commands {
         /// The path to mount the file system, the resulting csv can be found under this path
         #[arg(short, long)]
         mount_point: String,
+
+        /// Use one_shot file system for decompressing whole file at once and keep the decompressed
+        /// data in memory for faster access (with the downside of higher memory usage)
+        #[arg(short, long, default_value_t = false)]
+        one_shot: bool,
     },
 }
 
@@ -98,9 +103,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::MountCsv {
             mount_point,
             btr_path,
+            one_shot,
         }) => {
             let btr = Btr::from_url(btr_path.to_string())?;
-            let _res = btr.mount_csv(mount_point.to_string(), &mut vec![]).await?;
+
+            let _res = if *one_shot {
+                btr.mount_csv_one_shot(mount_point.to_string(), &mut vec![])
+                    .await?
+            } else {
+                btr.mount_csv_realtime(mount_point.to_string(), &mut vec![])
+                    .await?
+            };
 
             // Don't kill the program to keep the file system mounted
             // unless forcefully killed
