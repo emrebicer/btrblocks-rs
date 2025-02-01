@@ -8,7 +8,7 @@ use libc::ENOENT;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime};
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tokio::task::block_in_place;
 
 use crate::datafusion::BtrChunkedStream;
@@ -26,41 +26,52 @@ const TTL: Duration = Duration::from_secs(1);
 pub struct BtrBlocksRealtimeFs {
     btr: Btr,
     schema_ref: SchemaRef,
-    decompressed_csv_size: u64,
+    decompressed_csv_size: usize,
     mount_time: SystemTime,
     csv_header: String,
     column_count: usize,
+    cache_limit: usize,
+    stream: BtrChunkedStream,
+    raw_csv_data: String,
+    decompressed_bytes_count: usize,
+    removed_bytes_count: usize,
     ino_to_file: HashMap<u64, (FileType, String)>,
 }
 
 impl BtrBlocksRealtimeFs {
-    pub fn new(
+    pub async fn new(
         btr: Btr,
-        decompressed_csv_size: u64,
+        decompressed_csv_size: usize,
         schema_ref: SchemaRef,
         csv_header: String,
         column_count: usize,
-    ) -> Self {
-        Self {
-            btr,
+        cache_limit: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            btr: btr.clone(),
             decompressed_csv_size,
-            schema_ref,
+            schema_ref: schema_ref.clone(),
             mount_time: SystemTime::now(),
-            csv_header,
+            csv_header: csv_header.clone(),
             column_count,
+            cache_limit,
+            stream: BtrChunkedStream::new(schema_ref, btr, 10_000).await?,
+            raw_csv_data: csv_header.clone(),
+            decompressed_bytes_count: csv_header.len(),
+            removed_bytes_count: 0,
             ino_to_file: HashMap::from([
                 (1, (FileType::Directory, ".".to_string())),
                 (1, (FileType::Directory, "..".to_string())),
                 (2, (FileType::RegularFile, "data.csv".to_string())),
             ]),
-        }
+        })
     }
 
     fn csv_file_attr(&self) -> FileAttr {
         FileAttr {
             ino: 2,
-            size: self.decompressed_csv_size,
-            blocks: (self.decompressed_csv_size + 511) / 512,
+            size: self.decompressed_csv_size as u64,
+            blocks: (self.decompressed_csv_size as u64 + 511) / 512,
             atime: self.mount_time,
             mtime: self.mount_time,
             ctime: self.mount_time,
@@ -72,6 +83,7 @@ impl BtrBlocksRealtimeFs {
             gid: unsafe { libc::getgid() },
             rdev: 0,
             flags: 0,
+            //flags: libc::O_DIRECT as u32, // hint direct_io to disable kernel caching
             blksize: 4096,
         }
     }
@@ -91,25 +103,50 @@ impl BtrBlocksRealtimeFs {
             .map_err(|err| BtrBlocksError::Mount(err.to_string()))
     }
 
-    // TODO: compare ram usage with other mount implementation (just check head and tail)
-    // cache the latest poll result, this will be a low overhead on ram but huge gain
-    // on cpu time as we would not need to start decompressing over and over again...
-    async fn decompress_from_range(&self, start: usize, end: usize) -> Result<String> {
+    async fn decompress_from_range(&mut self, start: usize, end: usize) -> Result<String> {
         //println!("new read request, start: {start}, end: {end}");
-        let mut stream =
-            BtrChunkedStream::new(self.schema_ref.clone(), self.btr.clone(), 100_000).await?;
 
-        // data to cache within FS: stream, raw_csv_data, decompressed_bytes_count, removed_bytes_count
+        // possibilities,
+        // 1- cache is behind requested range (do nothing keep polling / or clear the cache?)
+        // 2- start is in cache but end is not (keep polling)
+        // 3- both start and end is in cache (perfect just return bytes)
+        // 4- cache is past start (just reinit stream from start)
 
-        let mut raw_csv_data = String::new();
+        if self.decompressed_bytes_count < start {
+            self.clear_cache();
+        }
 
-        // Write the header row to the target
-        raw_csv_data.push_str(self.csv_header.as_str());
-        let mut decompressed_bytes_count = raw_csv_data.len();
-        let mut removed_bytes_count = 0;
+        // Check if the requested range of bytes are already in the cache (perfect case 3)
+        if start >= self.removed_bytes_count && end <= self.decompressed_bytes_count {
+            //println!("@@@ CACHE HIT! Just returning result...");
+            let start_index = self.decompressed_bytes_count
+                - self.removed_bytes_count
+                - (self.decompressed_bytes_count - start);
+            let end_index = start_index + (end - start);
+            //println!("start_index: {start_index}, end_index: {end_index}");
+            let res = self.raw_csv_data[start_index..end_index].to_string();
+            self.clear_cache();
+            return Ok(res);
+        }
 
-        // Write the rows data in batches
-        while let Some(batch) = stream.next().await {
+        // Check if cache is past end (case 4, reinit stream)
+        if self.removed_bytes_count > start {
+            //println!("@@@@ CACHE MISS! Reinit stream...");
+            self.stream =
+                BtrChunkedStream::new(self.schema_ref.clone(), self.btr.clone(), 10_000).await?;
+
+            //self.raw_csv_data = String::new();
+            self.raw_csv_data.clear();
+            self.raw_csv_data.shrink_to_fit();
+
+            // Write the header row to the target
+            self.raw_csv_data.push_str(self.csv_header.as_str());
+            self.decompressed_bytes_count = self.raw_csv_data.len();
+            self.removed_bytes_count = 0;
+        }
+
+        // Keep polling the next rows to find the requested bytes in range
+        while let Some(batch) = self.stream.next().await {
             let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
             let num_rows = batch.num_rows();
             let num_columns = batch.num_columns();
@@ -119,17 +156,17 @@ impl BtrBlocksRealtimeFs {
                 .collect();
 
             for row_index in 0..num_rows {
-                raw_csv_data.push('\n');
-                decompressed_bytes_count += 1;
+                self.raw_csv_data.push('\n');
+                self.decompressed_bytes_count += 1;
 
                 for (counter, column) in columns.iter().enumerate() {
                     let value = extract_value_as_string(*column, row_index);
-                    raw_csv_data.push_str(&value.to_string());
-                    decompressed_bytes_count += value.len();
+                    self.raw_csv_data.push_str(&value.to_string());
+                    self.decompressed_bytes_count += value.len();
 
                     if counter + 1 < self.column_count {
-                        raw_csv_data.push(',');
-                        decompressed_bytes_count += 1;
+                        self.raw_csv_data.push(',');
+                        self.decompressed_bytes_count += 1;
                     }
                 }
             }
@@ -144,26 +181,85 @@ impl BtrBlocksRealtimeFs {
             //      - Return the requested chunk
             //
             //println!("Polled stream, decompressed_bytes_count: {decompressed_bytes_count}, removed_bytes_count: {removed_bytes_count}");
-            if decompressed_bytes_count < start {
-                //println!("1st case, clearing");
-                removed_bytes_count += raw_csv_data.len();
-                raw_csv_data.clear();
-            } else if decompressed_bytes_count >= start && decompressed_bytes_count >= end {
-                //println!("2nd case...");
-                //println!("start: {start}, end: {end}");
-                let start_index = decompressed_bytes_count
-                    - removed_bytes_count
-                    - (decompressed_bytes_count - start);
+            if self.decompressed_bytes_count < start {
+                self.clear_cache();
+            } else if self.decompressed_bytes_count >= start && self.decompressed_bytes_count >= end
+            {
+                let start_index = self.decompressed_bytes_count
+                    - self.removed_bytes_count
+                    - (self.decompressed_bytes_count - start);
                 let end_index = start_index + (end - start);
-                //println!("start_index: {start_index}, end_index: {end_index}");
-                let a = raw_csv_data[start_index..end_index].to_string();
-                //println!("a is: {a}");
-                return Ok(a);
+                let res = self.raw_csv_data[start_index..end_index].to_string();
+                self.clear_cache();
+                return Ok(res);
             }
         }
-        Err(BtrBlocksError::Custom(
-            "Failed to decompress from range".to_string(),
-        ))
+
+        // We have reached the end of the decompressed data
+        // If we have reached here, we now  calculate the actual decompressed full size
+        // so update it
+        //println!(
+        //    "No more files to decompress... Old size: {}, new size: {}",
+        //    self.decompressed_csv_size, self.decompressed_bytes_count
+        //);
+        self.decompressed_csv_size = self.decompressed_bytes_count;
+
+        if start > self.decompressed_csv_size {
+            // A non existent area is requested just return empty
+            Ok("".to_string())
+        } else if start <= self.decompressed_csv_size && end > self.decompressed_csv_size {
+            // Some part of the requested area exists, just return the existing bytes
+            let start_index = self.decompressed_bytes_count
+                - self.removed_bytes_count
+                - (self.decompressed_bytes_count - start);
+            Ok(self.raw_csv_data[start_index..].to_string())
+        } else {
+            // we never should en up here... Because both start and end is
+            // in the decompressed area, which shoul have been returned earlier anyways
+            Err(BtrBlocksError::Custom(
+                "Undefined behaviour, failed to decompress requested bytes".to_string(),
+            ))
+        }
+
+        //// Approach 2, just pad the rest of the bytes with new line
+        //if start > self.decompressed_bytes_count {
+        //    //return Ok("\0".repeat(end - start).to_string());
+        //    return Ok("".to_string());
+        //} else {
+        //    // We have some bytes that we want to have from the cache
+        //    // so pad the cache with \n until we have enough bytes
+        //    //let missing_len = end - self.decompressed_bytes_count;
+        //    //self.raw_csv_data.push_str(&"\0".repeat(missing_len));
+        //    //self.decompressed_bytes_count += missing_len;
+        //    //return Ok(self.raw_csv_data.clone());
+        //
+        //    //let missing_len = end - self.decompressed_bytes_count;
+        //    //self.raw_csv_data.push_str(&"\0".repeat(missing_len));
+        //    //self.decompressed_bytes_count += missing_len;
+        //    return Ok(self.raw_csv_data.clone());
+        //}
+
+        //Err(BtrBlocksError::Custom(
+        //    "Failed to decompress from range".to_string(),
+        //))
+    }
+
+    fn clear_cache(&mut self) {
+        if self.raw_csv_data.len() > self.cache_limit {
+            let bytes_to_remove = self.raw_csv_data.len() - self.cache_limit;
+            //println!(
+            //    "@@ Clearing unused cache... current cache size: {}, bytes to remove: {}",
+            //    self.raw_csv_data.len(),
+            //    bytes_to_remove
+            //);
+            self.raw_csv_data.drain(..bytes_to_remove);
+            self.raw_csv_data.shrink_to_fit();
+            //println!("1st case, clearing");
+            self.removed_bytes_count += bytes_to_remove;
+        }
+        //else {
+        //    println!("Not clearing cache, the size is only: {}", self.raw_csv_data.len());
+        //}
     }
 }
 
@@ -230,7 +326,7 @@ impl Filesystem for BtrBlocksRealtimeFs {
                 return;
             }
 
-            let runtime = Runtime::new().unwrap();
+            let runtime = Runtime::new().expect("should create a new tokio runtime");
 
             let res = runtime
                 .block_on(async {

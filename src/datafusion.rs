@@ -22,8 +22,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
-use futures::executor::block_on;
 use futures::stream::Stream;
+use tokio::runtime::Handle;
 
 #[derive(Debug, Clone)]
 pub struct BtrBlocksDataSource {
@@ -31,9 +31,10 @@ pub struct BtrBlocksDataSource {
 }
 
 impl BtrBlocksDataSource {
-    pub fn new(btr_url: String) -> Self {
+    pub async fn new(btr_url: String) -> Self {
         Self {
             btr: Btr::from_url(btr_url)
+                .await
                 .expect("the URL should be a valid URL pointing to a btr compressed file"),
         }
     }
@@ -49,8 +50,10 @@ impl TableProvider for BtrBlocksDataSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        let file_metadata =
-            block_on(self.btr.file_metadata()).expect("get file metadata from given btr path");
+        let _handle = Handle::current().enter();
+
+        let file_metadata = futures::executor::block_on(self.btr.file_metadata())
+            .expect("get file metadata from given btr path");
 
         file_metadata
             .to_schema_ref()
@@ -127,14 +130,16 @@ impl ExecutionPlan for BtrBlocksExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let meta = block_on(self.data_source.btr.file_metadata())
+        let _handle = Handle::current().enter();
+
+        let meta = futures::executor::block_on(self.data_source.btr.file_metadata())
             .expect("get file metadata from given btr path");
 
         let column_count = max(meta.parts.len(), 1);
 
         // Return a chunked stream to keep memory usage low
         Ok(Box::pin(
-            block_on(BtrChunkedStream::new(
+            futures::executor::block_on(BtrChunkedStream::new(
                 self.schema().clone(),
                 self.data_source.btr.clone(),
                 1_000_000 / column_count,
@@ -290,7 +295,7 @@ impl Stream for BtrChunkedStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut data_vec: Vec<Arc<dyn Array>> = vec![];
         let nrpp = self.num_rows_per_poll;
-        let btr = self.btr.clone();
+        let mut btr = self.btr.clone();
 
         for column in &mut self.column_caches {
             if column.finished() {
@@ -310,9 +315,9 @@ impl Stream for BtrChunkedStream {
 
             // Read next part until last part is read, or until there are enough elements to be
             // consumed
+            let _handle = Handle::current().enter();
             while column.current_cache_len() < nrpp && !column.done_reading_all_parts() {
-                block_on(column.read_next_part(&btr))
-                    .expect("should read next part without any errors");
+                futures::executor::block_on(column.read_next_part(&mut btr)).expect("");
             }
 
             // Now consume the data for the stream
@@ -321,7 +326,8 @@ impl Stream for BtrChunkedStream {
             match &mut column.cached_data {
                 TypedCache::Int(vec) => {
                     let mut builder = Int32Builder::new();
-                    let to_consumed = vec.drain(0..num_elements_to_consume);
+                    let to_consumed = vec.drain(0..num_elements_to_consume).collect::<Vec<i32>>();
+                    vec.shrink_to_fit();
                     for el in to_consumed {
                         builder.append_value(el);
                     }
@@ -329,7 +335,8 @@ impl Stream for BtrChunkedStream {
                 }
                 TypedCache::Float(vec) => {
                     let mut builder = Float64Builder::new();
-                    let to_consumed = vec.drain(0..num_elements_to_consume);
+                    let to_consumed = vec.drain(0..num_elements_to_consume).collect::<Vec<f64>>();
+                    vec.shrink_to_fit();
                     for el in to_consumed {
                         builder.append_value(el);
                     }
@@ -337,7 +344,10 @@ impl Stream for BtrChunkedStream {
                 }
                 TypedCache::String(vec) => {
                     let mut builder = StringBuilder::new();
-                    let to_consumed = vec.drain(0..num_elements_to_consume);
+                    let to_consumed = vec
+                        .drain(0..num_elements_to_consume)
+                        .collect::<Vec<String>>();
+                    vec.shrink_to_fit();
                     for el in to_consumed {
                         builder.append_value(el);
                     }

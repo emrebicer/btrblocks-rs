@@ -27,6 +27,8 @@ pub fn ensure_protocol(url: &mut String) {
         && !url.starts_with("s3://")
         && !url.starts_with("gs://")
         && !url.starts_with("gcs://")
+        && !url.starts_with("http://")
+        && !url.starts_with("https://")
     {
         url.insert_str(0, "file://");
     };

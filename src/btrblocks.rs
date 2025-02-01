@@ -8,7 +8,7 @@ use crate::{
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::arrow::{array::Array, datatypes::Schema as ArrowSchema};
 use fuser::{BackgroundSession, MountOption};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::{parse_url, ObjectStore, WriteMultipart};
 use serde::Deserialize;
 use std::{cmp::max, path::PathBuf};
@@ -367,19 +367,24 @@ impl Buffer {
 pub struct Btr {
     /// The path to the btrblocks compressed directory
     btr_url: Url,
+    metadata_bytes_cache: Vec<u8>,
 }
 
 impl Btr {
     /// Construct a Btr object from an existing BtrBlocks compressed file
-    pub fn from_url(btr_url: String) -> Result<Self> {
+    pub async fn from_url(btr_url: String) -> Result<Self> {
         let btr_url = string_to_btr_url(&mut btr_url.clone())?;
-        Ok(Self { btr_url })
+        let metadata_bytes_cache = FileMetadata::bytes_from_btr_url(btr_url.clone()).await?;
+        Ok(Self {
+            btr_url,
+            metadata_bytes_cache,
+        })
     }
 
     /// Construct a Btr object from an existing CSV file by compressing it
     /// `btr_path` is the target path for the BtrBlocks compressed file output
     /// Currently this function is only supported for local filesystem
-    pub fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self> {
+    pub async fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self> {
         // TODO: refactor this to use object store as well, need to read csv here and pass in data
         // to wrapper, (perhaps lines as string vector?)
         let bin_temp_dir = TempDir::new().map_err(|err| {
@@ -414,7 +419,7 @@ impl Btr {
             ),
             schema_data_vec,
         ) {
-            Ok(_) => Btr::from_url(btr_path_str),
+            Ok(_) => Btr::from_url(btr_path_str).await,
             Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
         }
     }
@@ -554,57 +559,36 @@ impl Btr {
         &self,
         mount_point: String,
         mount_options: &mut Vec<MountOption>,
+        cache_limit: usize,
     ) -> Result<BackgroundSession> {
-        // Decompress into csv and keep the result in memory
-        let mut raw_csv_data = String::new();
-
-        // Create the csv header text
         let file_metadata = self.file_metadata().await?;
-        let column_count = max(file_metadata.parts.len(), 1);
+        let column_count = file_metadata.parts.len();
         let header_str = self.csv_header().await?;
-
-        // Create the schema ref for the chunked stream
         let schema_ref = file_metadata.to_schema_ref()?;
 
-        // Create the ChunkedStream to read decompresssed data by parts
-        let mut stream =
-            BtrChunkedStream::new(schema_ref.clone(), self.clone(), 1_000_000 / column_count)
-                .await?;
+        let (store, path) =
+            parse_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
-        // Write the header row to the target
-        raw_csv_data.push_str(header_str.as_str());
+        let mut compressed_size = 0;
 
-        // Write the rows data in batches
-        while let Some(batch) = stream.next().await {
-            let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
-            let num_rows = batch.num_rows();
-            let num_columns = batch.num_columns();
+        // List all items under the directory
+        let mut stream = store.list(Some(&path));
 
-            let columns: Vec<&dyn Array> = (0..num_columns)
-                .map(|col_index| batch.column(col_index).as_ref())
-                .collect();
-
-            for row_index in 0..num_rows {
-                raw_csv_data.push('\n');
-
-                for (counter, column) in columns.iter().enumerate() {
-                    let value = extract_value_as_string(*column, row_index);
-                    raw_csv_data.push_str(&value.to_string());
-
-                    if counter + 1 < column_count {
-                        raw_csv_data.push(',');
-                    }
-                }
-            }
+        while let Some(object_metadata) = stream.try_next().await.map_err(|err| {
+            BtrBlocksError::Custom(format!("failed to iterate over directory items: {}", err))
+        })? {
+            compressed_size += object_metadata.size;
         }
 
         let btr_fs = BtrBlocksRealtimeFs::new(
             self.clone(),
-            raw_csv_data.len() as u64,
+            compressed_size * 2,
             schema_ref,
             header_str,
             column_count,
-        );
+            cache_limit,
+        )
+        .await?;
         btr_fs.mount(mount_point, mount_options)
     }
 
@@ -612,8 +596,8 @@ impl Btr {
         FileMetadata::from_btr_url(self.btr_url.clone()).await
     }
 
-    async fn file_metadata_bytes(&self) -> Result<Vec<u8>> {
-        FileMetadata::bytes_from_btr_url(self.btr_url.clone()).await
+    fn file_metadata_bytes(&self) -> Vec<u8> {
+        self.metadata_bytes_cache.clone()
     }
 
     async fn column_part_bytes(&self, column_index: u32, part_index: u32) -> Result<Vec<u8>> {
@@ -671,7 +655,7 @@ impl Btr {
     ) -> Result<Vec<i32>> {
         match ffi::decompress_column_part_i32(
             &self.column_part_bytes(column_index, part_index).await?,
-            &self.file_metadata_bytes().await?,
+            &self.file_metadata_bytes(),
             column_index,
             part_index,
         ) {
@@ -716,7 +700,7 @@ impl Btr {
     ) -> Result<Vec<String>> {
         match ffi::decompress_column_part_string(
             &self.column_part_bytes(column_index, part_index).await?,
-            &self.file_metadata_bytes().await?,
+            &self.file_metadata_bytes(),
             column_index,
             part_index,
         ) {
@@ -761,7 +745,7 @@ impl Btr {
     ) -> Result<Vec<f64>> {
         match ffi::decompress_column_part_f64(
             &self.column_part_bytes(column_index, part_index).await?,
-            &self.file_metadata_bytes().await?,
+            &self.file_metadata_bytes(),
             column_index,
             part_index,
         ) {

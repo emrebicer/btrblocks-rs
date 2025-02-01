@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ctx = SessionContext::new();
 
             let custom_table_provider =
-                btrblocks_rs::datafusion::BtrBlocksDataSource::new(btr_path.to_string());
+                btrblocks_rs::datafusion::BtrBlocksDataSource::new(btr_path.to_string()).await;
             ctx.register_table("btr", Arc::new(custom_table_provider))?;
             let df = ctx.sql(sql.as_str()).await?;
             df.show().await?;
@@ -94,10 +94,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 PathBuf::from_str(csv_path)?,
                 PathBuf::from_str(btr_path)?,
                 schema,
-            )?;
+            )
+            .await?;
         }
         Some(Commands::ToCsv { csv_path, btr_path }) => {
-            let btr = Btr::from_url(btr_path.to_string())?;
+            let btr = Btr::from_url(btr_path.to_string()).await?;
             btr.write_to_csv(csv_path.to_string()).await?;
         }
         Some(Commands::MountCsv {
@@ -105,13 +106,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             btr_path,
             one_shot,
         }) => {
-            let btr = Btr::from_url(btr_path.to_string())?;
+            let btr = Btr::from_url(btr_path.to_string()).await?;
 
             let _res = if *one_shot {
                 btr.mount_csv_one_shot(mount_point.to_string(), &mut vec![])
                     .await?
             } else {
-                btr.mount_csv_realtime(mount_point.to_string(), &mut vec![])
+                btr.mount_csv_realtime(mount_point.to_string(), &mut vec![], 4_000_000)
                     .await?
             };
 

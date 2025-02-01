@@ -22,7 +22,6 @@ mod tests {
     use datafusion::arrow::array::Int32Array;
     use datafusion::arrow::array::StringArray;
     use datafusion::prelude::SessionContext;
-    use futures::executor::block_on;
     use rand::rngs::StdRng;
     use rand::Rng;
     use rand::SeedableRng;
@@ -44,7 +43,7 @@ mod tests {
         vec![0.123, 213.1232, 4.20]
     }
 
-    fn create_temp_btr_from_csv(temp_files_dir: &TempDir, temp_btr_dir: &TempDir) -> crate::Btr {
+    async fn create_temp_btr_from_csv(temp_files_dir: &TempDir, temp_btr_dir: &TempDir) -> crate::Btr {
         // Create temp csv file
         let csv_path = PathBuf::from_str(
             format!("{}/data.csv", temp_files_dir.path().to_str().unwrap()).as_str(),
@@ -82,7 +81,7 @@ mod tests {
             crate::ColumnMetadata::new("Score".to_string(), crate::ColumnType::Double),
         ]);
 
-        let res = crate::Btr::from_csv(csv_path, btr_path, schema);
+        let res = crate::Btr::from_csv(csv_path, btr_path, schema).await;
         assert!(res.is_ok());
 
         res.unwrap()
@@ -103,7 +102,7 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let btr_temp_dir = TempDir::new().unwrap();
-        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir).await;
 
         let temp_csv_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
@@ -149,7 +148,7 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let btr_temp_dir = TempDir::new().unwrap();
-        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir).await;
 
         let temp_csv_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
@@ -160,7 +159,7 @@ mod tests {
         );
 
         let res = btr
-            .mount_csv(
+            .mount_csv_one_shot(
                 temp_csv_dir.path().to_str().unwrap().to_string(),
                 &mut vec![],
             )
@@ -200,12 +199,12 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let btr_temp_dir = TempDir::new().unwrap();
-        let _btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
+        let _btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir).await;
 
         let ctx = SessionContext::new();
 
         let custom_table_provider =
-            BtrBlocksDataSource::new(btr_temp_dir.path().to_str().unwrap().to_string());
+            BtrBlocksDataSource::new(btr_temp_dir.path().to_str().unwrap().to_string()).await;
         ctx.register_table("btr", Arc::new(custom_table_provider))
             .unwrap();
 
@@ -259,25 +258,27 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let btr_temp_dir = TempDir::new().unwrap();
-        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir).await;
 
-        let meta = block_on(btr.file_metadata()).unwrap();
+        let meta = btr.file_metadata().await.unwrap();
 
         for (col_index, part_info) in meta.parts.iter().enumerate() {
             match part_info.r#type {
                 ColumnType::Integer => {
                     // Read all data by iterating over parts
                     let mut parts_vec = Vec::new();
-                    println!("number of int parts: {}", part_info.num_parts);
                     for part_index in 0..part_info.num_parts {
-                        let mut res =
-                            block_on(btr.decompress_column_part_i32(col_index as u32, part_index))
-                                .expect("decompression should not fail");
+                        let mut res = btr
+                            .decompress_column_part_i32(col_index as u32, part_index)
+                            .await
+                            .expect("decompression should not fail");
                         parts_vec.append(&mut res);
                     }
 
                     // Read all data at once
-                    let column_vec = block_on(btr.decompress_column_i32(col_index as u32))
+                    let column_vec = btr
+                        .decompress_column_i32(col_index as u32)
+                        .await
                         .expect("decompression should not fail");
 
                     assert_eq!(parts_vec, column_vec);
@@ -285,16 +286,18 @@ mod tests {
                 ColumnType::Double => {
                     // Read all data by iterating over parts
                     let mut parts_vec = Vec::new();
-                    println!("number of f64 parts: {}", part_info.num_parts);
                     for part_index in 0..part_info.num_parts {
-                        let mut res =
-                            block_on(btr.decompress_column_part_f64(col_index as u32, part_index))
-                                .expect("decompression should not fail");
+                        let mut res = btr
+                            .decompress_column_part_f64(col_index as u32, part_index)
+                            .await
+                            .expect("decompression should not fail");
                         parts_vec.append(&mut res);
                     }
 
                     // Read all data at once
-                    let column_vec = block_on(btr.decompress_column_f64(col_index as u32))
+                    let column_vec = btr
+                        .decompress_column_f64(col_index as u32)
+                        .await
                         .expect("decompression should not fail");
 
                     assert_eq!(parts_vec, column_vec);
@@ -302,17 +305,18 @@ mod tests {
                 ColumnType::String => {
                     // Read all data by iterating over parts
                     let mut parts_vec = Vec::new();
-                    println!("number of string parts: {}", part_info.num_parts);
                     for part_index in 0..part_info.num_parts {
-                        let mut res = block_on(
-                            btr.decompress_column_part_string(col_index as u32, part_index),
-                        )
-                        .expect("decompression should not fail");
+                        let mut res = btr
+                            .decompress_column_part_string(col_index as u32, part_index)
+                            .await
+                            .expect("decompression should not fail");
                         parts_vec.append(&mut res);
                     }
 
                     // Read all data at once
-                    let column_vec = block_on(btr.decompress_column_string(col_index as u32))
+                    let column_vec = btr
+                        .decompress_column_string(col_index as u32)
+                        .await
                         .expect("decompression should not fail");
 
                     assert_eq!(parts_vec, column_vec);
@@ -328,8 +332,8 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let temp_btr_dir = TempDir::new().unwrap();
-        let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
-        let ids = block_on(btr.decompress_column_i32(0)).unwrap();
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir).await;
+        let ids = btr.decompress_column_i32(0).await.unwrap();
         assert_eq!(ids, get_mock_ids());
     }
 
@@ -339,8 +343,8 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let temp_btr_dir = TempDir::new().unwrap();
-        let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
-        let names = block_on(btr.decompress_column_string(1)).unwrap();
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir).await;
+        let names = btr.decompress_column_string(1).await.unwrap();
         assert_eq!(names, get_mock_names());
     }
 
@@ -350,8 +354,8 @@ mod tests {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let temp_btr_dir = TempDir::new().unwrap();
-        let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir);
-        let scores = block_on(btr.decompress_column_f64(2)).unwrap();
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &temp_btr_dir).await;
+        let scores = btr.decompress_column_f64(2).await.unwrap();
         assert_eq!(scores, get_mock_scores());
     }
 
