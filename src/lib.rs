@@ -43,7 +43,10 @@ mod tests {
         vec![0.123, 213.1232, 4.20]
     }
 
-    async fn create_temp_btr_from_csv(temp_files_dir: &TempDir, temp_btr_dir: &TempDir) -> crate::Btr {
+    async fn create_temp_btr_from_csv(
+        temp_files_dir: &TempDir,
+        temp_btr_dir: &TempDir,
+    ) -> crate::Btr {
         // Create temp csv file
         let csv_path = PathBuf::from_str(
             format!("{}/data.csv", temp_files_dir.path().to_str().unwrap()).as_str(),
@@ -144,7 +147,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial]
-    async fn mount_csv() {
+    async fn mount_csv_one_shot() {
         let temp_files_dir =
             TempDir::new().expect("should not fail to create a temp dir for csv data");
         let btr_temp_dir = TempDir::new().unwrap();
@@ -162,6 +165,58 @@ mod tests {
             .mount_csv_one_shot(
                 temp_csv_dir.path().to_str().unwrap().to_string(),
                 &mut vec![],
+            )
+            .await;
+
+        assert!(res.is_ok());
+
+        // Check if the contents of the decompressed csv file is correct
+        let mut correct_csv_data = String::from("column_0,column_1,column_2\n");
+
+        let ids = get_mock_ids();
+        let names = get_mock_names();
+        let scores = get_mock_scores();
+
+        for i in 0..ids.len() {
+            correct_csv_data.push_str(ids.get(i).unwrap().to_string().as_str());
+            correct_csv_data.push(',');
+
+            correct_csv_data.push_str(names.get(i).unwrap().to_string().as_str());
+            correct_csv_data.push(',');
+
+            correct_csv_data.push_str(scores.get(i).unwrap().to_string().as_str());
+            if i + 1 < ids.len() {
+                correct_csv_data.push('\n');
+            }
+        }
+
+        // Read the decompressed data
+        let result_csv_data = fs::read_to_string(temp_csv_path).unwrap();
+
+        assert_eq!(correct_csv_data, result_csv_data);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    #[serial]
+    async fn mount_csv_realtime() {
+        let temp_files_dir =
+            TempDir::new().expect("should not fail to create a temp dir for csv data");
+        let btr_temp_dir = TempDir::new().unwrap();
+        let btr = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir).await;
+
+        let temp_csv_dir =
+            TempDir::new().expect("should not fail to create a temp dir for csv data");
+
+        let temp_csv_path = format!(
+            "{}/data.csv",
+            temp_csv_dir.path().to_str().unwrap().to_string()
+        );
+
+        let res = btr
+            .mount_csv_realtime(
+                temp_csv_dir.path().to_str().unwrap().to_string(),
+                &mut vec![],
+                10,
             )
             .await;
 
