@@ -2,14 +2,14 @@ use crate::{
     datafusion::BtrChunkedStream,
     error::BtrBlocksError,
     mount::{oneshot_fs::BtrBlocksOneShotFs, realtime_fs::BtrBlocksRealtimeFs},
-    util::{ensure_protocol, extract_value_as_string, string_to_btr_url},
+    util::{ensure_protocol, extract_value_as_string, parse_generic_url, string_to_btr_url},
     Result,
 };
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::arrow::{array::Array, datatypes::Schema as ArrowSchema};
 use fuser::{BackgroundSession, MountOption};
 use futures::{StreamExt, TryStreamExt};
-use object_store::{parse_url, ObjectStore, WriteMultipart};
+use object_store::{ObjectStore, WriteMultipart};
 use serde::Deserialize;
 use std::{cmp::max, path::PathBuf};
 use temp_dir::TempDir;
@@ -130,7 +130,7 @@ impl FileMetadata {
             .map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         let (store, path) =
-            parse_url(&metadata_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+            parse_generic_url(&metadata_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         let metadata_bytes = store
             .get(&path)
@@ -445,7 +445,7 @@ impl Btr {
             BtrChunkedStream::new(schema_ref, self.clone(), 1_000_000 / column_count).await?;
 
         let (store, path) =
-            parse_url(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+            parse_generic_url(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         let upload = store.put_multipart(&path).await.unwrap();
         let mut write = WriteMultipart::new(upload);
@@ -567,7 +567,7 @@ impl Btr {
         let schema_ref = file_metadata.to_schema_ref()?;
 
         let (store, path) =
-            parse_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+            parse_generic_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         let mut compressed_size = 0;
 
@@ -607,7 +607,7 @@ impl Btr {
             .map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         let (store, path) =
-            parse_url(&column_part_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+            parse_generic_url(&column_part_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         Ok(store
             .get(&path)

@@ -2,6 +2,7 @@ use datafusion::arrow::{
     array::{Array, Float64Array, Int32Array, StringArray},
     datatypes::DataType,
 };
+use object_store::{parse_url, path::Path, ObjectStore, ObjectStoreScheme};
 use url::Url;
 
 use crate::{error::BtrBlocksError, Result};
@@ -53,5 +54,33 @@ pub fn extract_value_as_string(array: &dyn Array, index: usize) -> String {
             float_array.value(index).to_string()
         }
         _ => format!("Unsupported type: {:?}", array.data_type()),
+    }
+}
+
+pub fn parse_generic_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path)> {
+    let (scheme, path) =
+        ObjectStoreScheme::parse(url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+
+    match scheme {
+        ObjectStoreScheme::Local => {
+            parse_url(&url).map_err(|err| BtrBlocksError::Url(err.to_string()))
+        }
+        ObjectStoreScheme::AmazonS3 => Ok((
+            Box::new(
+                object_store::aws::AmazonS3Builder::from_env()
+                    .build()
+                    .map_err(|err| BtrBlocksError::Url(err.to_string()))?,
+            ),
+            path,
+        )),
+        ObjectStoreScheme::GoogleCloudStorage => {
+            unimplemented!()
+        }
+        ObjectStoreScheme::Http => {
+            unimplemented!()
+        }
+        _ => {
+            unimplemented!()
+        }
     }
 }
