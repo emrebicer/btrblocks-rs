@@ -96,7 +96,7 @@ mod tests {
         let _ = create_temp_btr_from_csv(&temp_files_dir, &btr_temp_dir);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial]
     async fn btr_to_csv() {
         let temp_files_dir =
@@ -142,7 +142,7 @@ mod tests {
         assert_eq!(correct_csv_data, result_csv_data);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial]
     async fn mount_csv() {
         let temp_files_dir =
@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(correct_csv_data, result_csv_data);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     #[serial]
     async fn sql_query() {
         let temp_files_dir =

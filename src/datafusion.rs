@@ -23,7 +23,6 @@ use datafusion::physical_plan::{
 use datafusion_expr::Expr;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 use futures::stream::Stream;
-use tokio::runtime::Handle;
 
 #[derive(Debug, Clone)]
 pub struct BtrBlocksDataSource {
@@ -50,10 +49,11 @@ impl TableProvider for BtrBlocksDataSource {
     }
 
     fn schema(&self) -> SchemaRef {
-        let _handle = Handle::current().enter();
-
-        let file_metadata = futures::executor::block_on(self.btr.file_metadata())
-            .expect("get file metadata from given btr path");
+        let file_metadata = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(self.btr.file_metadata())
+                .expect("get file metadata from given btr path")
+        });
 
         file_metadata
             .to_schema_ref()
@@ -130,20 +130,23 @@ impl ExecutionPlan for BtrBlocksExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let _handle = Handle::current().enter();
-
-        let meta = futures::executor::block_on(self.data_source.btr.file_metadata())
-            .expect("get file metadata from given btr path");
+        let meta = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(self.data_source.btr.file_metadata())
+                .expect("get file metadata from given btr path")
+        });
 
         let column_count = max(meta.parts.len(), 1);
 
         // Return a chunked stream to keep memory usage low
         Ok(Box::pin(
-            futures::executor::block_on(BtrChunkedStream::new(
-                self.schema().clone(),
-                self.data_source.btr.clone(),
-                1_000_000 / column_count,
-            ))
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(BtrChunkedStream::new(
+                    self.schema().clone(),
+                    self.data_source.btr.clone(),
+                    1_000_000 / column_count,
+                ))
+            })
             .map_err(|err| DataFusionError::External(Box::new(err)))?,
         ))
     }
@@ -221,6 +224,13 @@ impl DecompressedColumnCache {
         Ok(())
     }
 
+    async fn read_until_enough_cache(&mut self, btr: &Btr, nrpp: usize) -> crate::Result<()> {
+        while self.current_cache_len() < nrpp && !self.done_reading_all_parts() {
+            self.read_next_part(&btr).await?;
+        }
+        Ok(())
+    }
+
     fn current_cache_len(&self) -> usize {
         match &self.cached_data {
             TypedCache::Int(vec) => vec.len(),
@@ -295,7 +305,7 @@ impl Stream for BtrChunkedStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         let mut data_vec: Vec<Arc<dyn Array>> = vec![];
         let nrpp = self.num_rows_per_poll;
-        let mut btr = self.btr.clone();
+        let btr = self.btr.clone();
 
         for column in &mut self.column_caches {
             if column.finished() {
@@ -313,11 +323,12 @@ impl Stream for BtrChunkedStream {
                 return Poll::Ready(None);
             }
 
-            // Read next part until last part is read, or until there are enough elements to be
-            // consumed
-            let _handle = Handle::current().enter();
-            while column.current_cache_len() < nrpp && !column.done_reading_all_parts() {
-                futures::executor::block_on(column.read_next_part(&mut btr)).expect("");
+            if let Err(e) = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current()
+                    .block_on(column.read_until_enough_cache(&btr, nrpp))
+            }) {
+                println!("failed to decompress part: {e}");
+                return Poll::Pending;
             }
 
             // Now consume the data for the stream

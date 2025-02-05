@@ -8,8 +8,7 @@ use libc::ENOENT;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::time::{Duration, SystemTime};
-use tokio::runtime::{Handle, Runtime};
-use tokio::task::block_in_place;
+use tokio::runtime::Runtime;
 
 use crate::datafusion::BtrChunkedStream;
 use crate::error::BtrBlocksError;
@@ -329,13 +328,7 @@ impl Filesystem for BtrBlocksRealtimeFs {
             let runtime = Runtime::new().expect("should create a new tokio runtime");
 
             let res = runtime
-                .block_on(async {
-                    block_in_place(|| {
-                        let value = tokio::runtime::Handle::current()
-                            .block_on(async { self.decompress_from_range(start, end).await });
-                        value
-                    })
-                })
+                .block_on(self.decompress_from_range(start, end))
                 .expect("failed to decompress from range");
 
             reply.data(res.as_bytes());
