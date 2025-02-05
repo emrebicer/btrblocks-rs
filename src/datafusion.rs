@@ -226,7 +226,7 @@ impl DecompressedColumnCache {
 
     async fn read_until_enough_cache(&mut self, btr: &Btr, nrpp: usize) -> crate::Result<()> {
         while self.current_cache_len() < nrpp && !self.done_reading_all_parts() {
-            self.read_next_part(&btr).await?;
+            self.read_next_part(btr).await?;
         }
         Ok(())
     }

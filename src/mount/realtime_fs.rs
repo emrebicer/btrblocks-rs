@@ -317,10 +317,10 @@ impl Filesystem for BtrBlocksRealtimeFs {
             let start = offset as usize;
 
             // Calculate the end of the slice
-            let end = (start + size as usize).min(self.decompressed_csv_size as usize);
+            let end = (start + size as usize).min(self.decompressed_csv_size);
 
             // Ensure the offset is within bounds
-            if start >= self.decompressed_csv_size as usize {
+            if start >= self.decompressed_csv_size {
                 reply.data(&[]);
                 return;
             }
