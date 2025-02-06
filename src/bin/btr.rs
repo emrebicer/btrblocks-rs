@@ -9,9 +9,19 @@ use btrblocks_rs::{Btr, Schema};
 use clap::{Parser, Subcommand};
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
+use fuser::MountOption;
 
 #[derive(Parser)]
-#[command(version, about, long_about = None, arg_required_else_help = true)]
+#[command(
+    version,
+    about = "btr is a program that makes use of `btrblocks_rs` under to hood to interact with btrblocks compressed files",
+    long_about = "btr is a program that makes use of `btrblocks_rs` under to hood to interact with btrblocks compressed files.
+It can access to multiple objects stores such as local filesystem, Amazon s3, Google Cloud Storage and HTTP file servers.
+
+For some object stores, you should provide your credentials and store information via environment variables;
+ - Amazon s3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION and AWS_BUCKET_NAME",
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -65,6 +75,20 @@ enum Commands {
         /// data in memory for faster access (with the downside of higher memory usage)
         #[arg(short, long, default_value_t = false)]
         one_shot: bool,
+
+        /// Mount flag to allow all users to access files on this filesystem.
+        /// By default access is restricted to the user who mounted it
+        #[arg(long, default_value_t = false)]
+        allow_other: bool,
+
+        /// Mount flag to allow the root user to access this filesystem,
+        /// in addition to the user who mounted it
+        #[arg(long, default_value_t = false)]
+        allow_root: bool,
+
+        /// Mount flag to automatically unmount when the mounting process exits
+        #[arg(long, default_value_t = false)]
+        auto_unmount: bool,
     },
 }
 
@@ -105,14 +129,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             mount_point,
             btr_path,
             one_shot,
+            allow_other,
+            allow_root,
+            auto_unmount,
         }) => {
+            let mut mount_options = vec![];
+
+            if *allow_other {
+                mount_options.push(MountOption::AllowOther);
+            }
+
+            if *allow_root {
+                mount_options.push(MountOption::AllowRoot);
+            }
+
+            if *auto_unmount {
+                mount_options.push(MountOption::AutoUnmount);
+            }
+
             let btr = Btr::from_url(btr_path.to_string()).await?;
 
             let _res = if *one_shot {
-                btr.mount_csv_one_shot(mount_point.to_string(), &mut vec![])
+                btr.mount_csv_one_shot(mount_point.to_string(), &mut mount_options)
                     .await?
             } else {
-                btr.mount_csv_realtime(mount_point.to_string(), &mut vec![], 4_000_000)
+                btr.mount_csv_realtime(mount_point.to_string(), &mut mount_options, 4_000_000)
                     .await?
             };
 
