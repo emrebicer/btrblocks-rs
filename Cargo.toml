@@ -23,7 +23,7 @@ object_store = { version = "0.11.2", features = ["aws", "gcp", "http"] }
 url = "2.5.4"
 fuser = "0.15.1"
 libc = "0.2.169"
-tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "parking_lot"] }
+tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread"] }
 
 # Optional dependencies for the binary target
 clap = { version = "4.5.21", optional = true, features = ["derive"] }
@@ -43,6 +43,14 @@ git2 = "0.18.2"
 name = "btr"
 path = "src/bin/btr.rs"
 required-features = ["cli"]
+
+# Binary size optimizations for the release profile from https://github.com/johnthagen/min-sized-rust
+[profile.release]
+opt-level = 'z'     # Optimize for size
+lto = true          # Enable link-time optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations
+panic = 'abort'     # Abort on panic
+strip = true        # Strip symbols from binary*
 
 [features]
 cli = ["clap", "serde_yaml"]
