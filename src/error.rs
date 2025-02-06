@@ -14,6 +14,8 @@ pub enum BtrBlocksError {
     Url(String),
     #[error("an error occured while mounting with fuse: `{0}`")]
     Mount(String),
+    #[error("an error occured while interacting with the object store: `{0}`")]
+    ObjectStore(String),
     #[error("a custom error occured: `{0}`")]
     Custom(String),
 }

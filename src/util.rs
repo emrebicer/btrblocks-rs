@@ -58,29 +58,31 @@ pub fn extract_value_as_string(array: &dyn Array, index: usize) -> String {
 }
 
 pub fn parse_generic_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path)> {
-    let (scheme, path) =
-        ObjectStoreScheme::parse(url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+    let (scheme, path) = ObjectStoreScheme::parse(url)
+        .map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))?;
 
     match scheme {
-        ObjectStoreScheme::Local => {
-            parse_url(&url).map_err(|err| BtrBlocksError::Url(err.to_string()))
+        ObjectStoreScheme::Local | ObjectStoreScheme::Http => {
+            parse_url(&url).map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))
         }
         ObjectStoreScheme::AmazonS3 => Ok((
             Box::new(
                 object_store::aws::AmazonS3Builder::from_env()
                     .build()
-                    .map_err(|err| BtrBlocksError::Url(err.to_string()))?,
+                    .map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))?,
             ),
             path,
         )),
-        ObjectStoreScheme::GoogleCloudStorage => {
-            unimplemented!()
-        }
-        ObjectStoreScheme::Http => {
-            unimplemented!()
-        }
-        _ => {
-            unimplemented!()
-        }
+        ObjectStoreScheme::GoogleCloudStorage => Ok((
+            Box::new(
+                object_store::gcp::GoogleCloudStorageBuilder::from_env()
+                    .build()
+                    .map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))?,
+            ),
+            path,
+        )),
+        _ => Err(BtrBlocksError::ObjectStore(
+            "Specified URL protocol is not supported".to_string(),
+        )),
     }
 }
