@@ -7,6 +7,7 @@ use crate::{error::BtrBlocksError, util::extract_value_as_string, Btr, Result};
 
 use super::chunked_decompression::ChunkedDecompressionStream;
 
+/// A `stream` that decompresses btr into csv, returns `num_rows_per_poll` rows on each poll
 pub struct CsvDecompressionStream {
     column_count: usize,
     chunked_decompression_stream: ChunkedDecompressionStream,
@@ -19,10 +20,9 @@ impl CsvDecompressionStream {
         let file_metadata = btr.file_metadata().await?;
 
         let column_count = file_metadata.num_columns as usize;
-        let schema_ref = file_metadata.to_schema_ref()?;
 
         let chunked_decompression_stream =
-            ChunkedDecompressionStream::new(schema_ref, btr, num_rows_per_poll).await?;
+            ChunkedDecompressionStream::new(btr, num_rows_per_poll).await?;
 
         let mut csv_header = String::new();
 

@@ -515,7 +515,6 @@ impl Btr {
         let file_metadata = self.file_metadata().await?;
         let column_count = file_metadata.parts.len();
         let header_str = self.csv_header().await?;
-        let schema_ref = file_metadata.to_schema_ref()?;
 
         let (store, path) =
             parse_generic_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
@@ -552,7 +551,6 @@ impl Btr {
         let btr_fs = BtrBlocksRealtimeFs::new(
             self.clone(),
             csv_size,
-            schema_ref,
             header_str,
             column_count,
             cache_limit,

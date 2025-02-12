@@ -1,5 +1,4 @@
 use datafusion::arrow::array::Array;
-use datafusion::arrow::datatypes::SchemaRef;
 use fuser::{
     BackgroundSession, FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData,
     ReplyDirectory, ReplyEntry, Request,
@@ -25,7 +24,6 @@ const TTL: Duration = Duration::from_secs(1);
 /// be lower but processing time might be higher per read requests
 pub struct BtrBlocksRealtimeFs {
     btr: Btr,
-    schema_ref: SchemaRef,
     decompressed_csv_size: usize,
     mount_time: SystemTime,
     csv_header: String,
@@ -43,7 +41,6 @@ impl BtrBlocksRealtimeFs {
     pub async fn new(
         btr: Btr,
         decompressed_csv_size: usize,
-        schema_ref: SchemaRef,
         csv_header: String,
         column_count: usize,
         cache_limit: usize,
@@ -51,12 +48,11 @@ impl BtrBlocksRealtimeFs {
         Ok(Self {
             btr: btr.clone(),
             decompressed_csv_size,
-            schema_ref: schema_ref.clone(),
             mount_time: SystemTime::now(),
             csv_header: csv_header.clone(),
             column_count,
             cache_limit,
-            stream: ChunkedDecompressionStream::new(schema_ref, btr, 10_000).await?,
+            stream: ChunkedDecompressionStream::new(btr, 10_000).await?,
             raw_csv_data: csv_header.clone(),
             decompressed_bytes_count: csv_header.len(),
             removed_bytes_count: 0,
@@ -135,7 +131,6 @@ impl BtrBlocksRealtimeFs {
         if self.removed_bytes_count > start {
             //println!("@@@@ CACHE MISS! Reinit stream...");
             self.stream = ChunkedDecompressionStream::new(
-                self.schema_ref.clone(),
                 self.btr.clone(),
                 10_000,
             )

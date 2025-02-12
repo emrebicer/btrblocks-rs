@@ -138,7 +138,6 @@ impl ExecutionPlan for BtrBlocksExec {
         Ok(Box::pin(
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(ChunkedDecompressionStream::new(
-                    self.schema().clone(),
                     self.data_source.btr.clone(),
                     1_000_000 / column_count,
                 ))

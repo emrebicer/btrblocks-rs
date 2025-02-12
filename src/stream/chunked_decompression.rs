@@ -21,13 +21,15 @@ pub struct ChunkedDecompressionStream {
 
 impl ChunkedDecompressionStream {
     pub async fn new(
-        schema_ref: SchemaRef,
         btr: Btr,
         num_rows_per_poll: usize,
     ) -> crate::Result<Self> {
         let mut column_caches = vec![];
 
-        for (counter, field) in btr.file_metadata().await?.parts.into_iter().enumerate() {
+        let metadata = btr.file_metadata().await?;
+        let schema_ref = metadata.to_schema_ref()?;
+
+        for (counter, field) in metadata.parts.into_iter().enumerate() {
             let vec = match field.r#type {
                 ColumnType::Integer => TypedCache::Int(vec![]),
                 ColumnType::Double => TypedCache::Float(vec![]),
