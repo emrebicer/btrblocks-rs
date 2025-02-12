@@ -7,6 +7,7 @@ use fuser::{
 use libc::ENOENT;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::runtime::Runtime;
 
@@ -35,6 +36,7 @@ pub struct BtrBlocksRealtimeFs {
     decompressed_bytes_count: usize,
     removed_bytes_count: usize,
     ino_to_file: HashMap<u64, (FileType, String)>,
+    rt: Arc<Runtime>,
 }
 
 impl BtrBlocksRealtimeFs {
@@ -63,6 +65,7 @@ impl BtrBlocksRealtimeFs {
                 (1, (FileType::Directory, "..".to_string())),
                 (2, (FileType::RegularFile, "data.csv".to_string())),
             ]),
+            rt: Arc::new(Runtime::new().map_err(|e| BtrBlocksError::Custom(e.to_string()))?),
         })
     }
 
@@ -325,9 +328,9 @@ impl Filesystem for BtrBlocksRealtimeFs {
                 return;
             }
 
-            let runtime = Runtime::new().expect("should create a new tokio runtime");
-
-            let res = runtime
+            let res = self
+                .rt
+                .clone()
                 .block_on(self.decompress_from_range(start, end))
                 .expect("failed to decompress from range");
 
