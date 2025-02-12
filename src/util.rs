@@ -63,7 +63,7 @@ pub fn parse_generic_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path)> {
 
     match scheme {
         ObjectStoreScheme::Local | ObjectStoreScheme::Http => {
-            parse_url(&url).map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))
+            parse_url(url).map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))
         }
         ObjectStoreScheme::AmazonS3 => Ok((
             Box::new(

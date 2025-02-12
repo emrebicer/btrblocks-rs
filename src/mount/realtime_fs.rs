@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::runtime::Runtime;
 
-use crate::datafusion::BtrChunkedStream;
 use crate::error::BtrBlocksError;
+use crate::stream::ChunkedDecompressionStream;
 use crate::util::extract_value_as_string;
 use crate::{Btr, Result};
 use futures::StreamExt;
@@ -31,7 +31,7 @@ pub struct BtrBlocksRealtimeFs {
     csv_header: String,
     column_count: usize,
     cache_limit: usize,
-    stream: BtrChunkedStream,
+    stream: ChunkedDecompressionStream,
     raw_csv_data: String,
     decompressed_bytes_count: usize,
     removed_bytes_count: usize,
@@ -56,7 +56,7 @@ impl BtrBlocksRealtimeFs {
             csv_header: csv_header.clone(),
             column_count,
             cache_limit,
-            stream: BtrChunkedStream::new(schema_ref, btr, 10_000).await?,
+            stream: ChunkedDecompressionStream::new(schema_ref, btr, 10_000).await?,
             raw_csv_data: csv_header.clone(),
             decompressed_bytes_count: csv_header.len(),
             removed_bytes_count: 0,
@@ -134,8 +134,12 @@ impl BtrBlocksRealtimeFs {
         // Check if cache is past end (case 4, reinit stream)
         if self.removed_bytes_count > start {
             //println!("@@@@ CACHE MISS! Reinit stream...");
-            self.stream =
-                BtrChunkedStream::new(self.schema_ref.clone(), self.btr.clone(), 10_000).await?;
+            self.stream = ChunkedDecompressionStream::new(
+                self.schema_ref.clone(),
+                self.btr.clone(),
+                10_000,
+            )
+            .await?;
 
             //self.raw_csv_data = String::new();
             self.raw_csv_data.clear();

@@ -1,12 +1,12 @@
 use crate::{
-    datafusion::BtrChunkedStream,
     error::BtrBlocksError,
     mount::{oneshot_fs::BtrBlocksOneShotFs, realtime_fs::BtrBlocksRealtimeFs},
-    util::{ensure_protocol, extract_value_as_string, parse_generic_url, string_to_btr_url},
+    stream::CsvDecompressionStream,
+    util::{ensure_protocol, parse_generic_url, string_to_btr_url},
     Result,
 };
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
-use datafusion::arrow::{array::Array, datatypes::Schema as ArrowSchema};
 use fuser::{BackgroundSession, MountOption};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, WriteMultipart};
@@ -435,14 +435,10 @@ impl Btr {
         // Create the csv header text
         let file_metadata = self.file_metadata().await?;
         let column_count = max(file_metadata.parts.len(), 1);
-        let header_str = self.csv_header().await?;
-
-        // Create the schema ref for the chunked stream
-        let schema_ref = file_metadata.to_schema_ref()?;
 
         // Create the ChunkedStream to read decompresssed data by parts
         let mut stream =
-            BtrChunkedStream::new(schema_ref, self.clone(), 1_000_000 / column_count).await?;
+            CsvDecompressionStream::new(self.clone(), 1_000_000 / column_count).await?;
 
         let (store, path) =
             parse_generic_url(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
@@ -450,31 +446,10 @@ impl Btr {
         let upload = store.put_multipart(&path).await.unwrap();
         let mut write = WriteMultipart::new(upload);
 
-        // Write the header row to the target
-        write.write(header_str.as_bytes());
-
         // Write the rows data in batches
         while let Some(batch) = stream.next().await {
             let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
-            let num_rows = batch.num_rows();
-            let num_columns = batch.num_columns();
-
-            let columns: Vec<&dyn Array> = (0..num_columns)
-                .map(|col_index| batch.column(col_index).as_ref())
-                .collect();
-
-            for row_index in 0..num_rows {
-                write.write("\n".as_bytes());
-
-                for (counter, column) in columns.iter().enumerate() {
-                    let value = extract_value_as_string(*column, row_index);
-                    write.write(value.as_bytes());
-
-                    if counter + 1 < column_count {
-                        write.write(",".as_bytes());
-                    }
-                }
-            }
+            write.write(batch.as_bytes());
         }
 
         // Finish writing
@@ -515,40 +490,15 @@ impl Btr {
         // Create the csv header text
         let file_metadata = self.file_metadata().await?;
         let column_count = max(file_metadata.parts.len(), 1);
-        let header_str = self.csv_header().await?;
-
-        // Create the schema ref for the chunked stream
-        let schema_ref = file_metadata.to_schema_ref()?;
 
         // Create the ChunkedStream to read decompresssed data by parts
         let mut stream =
-            BtrChunkedStream::new(schema_ref, self.clone(), 1_000_000 / column_count).await?;
-
-        // Write the header row to the target
-        raw_csv_data.push_str(header_str.as_str());
+            CsvDecompressionStream::new(self.clone(), 1_000_000 / column_count).await?;
 
         // Write the rows data in batches
         while let Some(batch) = stream.next().await {
             let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
-            let num_rows = batch.num_rows();
-            let num_columns = batch.num_columns();
-
-            let columns: Vec<&dyn Array> = (0..num_columns)
-                .map(|col_index| batch.column(col_index).as_ref())
-                .collect();
-
-            for row_index in 0..num_rows {
-                raw_csv_data.push('\n');
-
-                for (counter, column) in columns.iter().enumerate() {
-                    let value = extract_value_as_string(*column, row_index);
-                    raw_csv_data.push_str(&value.to_string());
-
-                    if counter + 1 < column_count {
-                        raw_csv_data.push(',');
-                    }
-                }
-            }
+            raw_csv_data.push_str(&batch);
         }
 
         let btr_fs = BtrBlocksOneShotFs::new(raw_csv_data);
@@ -572,34 +522,15 @@ impl Btr {
 
         let csv_size = if precompute_csv_size {
             // Add the header size
-            let mut size = header_str.len();
+            let mut size = 0;
 
             // Create the ChunkedStream to calculate the correct decompressed csv size
-            let mut stream =
-                BtrChunkedStream::new(schema_ref.clone(), self.clone(), 10_000).await?;
+            let mut stream = CsvDecompressionStream::new(self.clone(), 10_000).await?;
 
             // Write the rows data in batches
             while let Some(batch) = stream.next().await {
                 let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
-                let num_rows = batch.num_rows();
-                let num_columns = batch.num_columns();
-
-                let columns: Vec<&dyn Array> = (0..num_columns)
-                    .map(|col_index| batch.column(col_index).as_ref())
-                    .collect();
-
-                for row_index in 0..num_rows {
-                    size += 1;
-
-                    for (counter, column) in columns.iter().enumerate() {
-                        let value = extract_value_as_string(*column, row_index);
-                        size += value.len();
-
-                        if counter + 1 < column_count {
-                            size += 1;
-                        }
-                    }
-                }
+                size += batch.len();
             }
 
             size

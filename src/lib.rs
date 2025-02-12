@@ -3,6 +3,7 @@ pub mod datafusion;
 mod error;
 mod ffi;
 mod mount;
+mod stream;
 mod util;
 
 pub use btrblocks::*;
