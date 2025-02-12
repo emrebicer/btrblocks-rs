@@ -217,6 +217,7 @@ mod tests {
                 temp_csv_dir.path().to_str().unwrap().to_string(),
                 &mut vec![],
                 10,
+                false,
             )
             .await;
 

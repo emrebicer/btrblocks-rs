@@ -76,6 +76,25 @@ enum Commands {
         #[arg(short, long, default_value_t = false)]
         one_shot: bool,
 
+        /// Calculate the decompressed file size before mounting the filesystem
+        ///
+        /// While using the realtime decompression filesystem, decompression is only
+        /// performed during a read request, hence the full decompressed file size is unknown
+        /// untill decompression is performed on all available bytes. Instead of the real size of
+        /// bytes, an estimation of file size will be reported via fuse. Which might introduce some
+        /// problems when external programs wants to read last bytes directly (like tail).
+        ///
+        /// Please note that once a full decompression is performed, the file size will be updated to the
+        /// correct size. So even though first `tail` usage will result in a wrong result, the
+        /// following requests will work as intended.
+        ///
+        /// But if you want the correct file size in the first place, you can set this option to
+        /// true for a full decompression before mounting just for calculating the correct file size.
+        ///
+        /// This option will only be used if one_shot is set to false (realtimefs is in use)
+        #[arg(short, long, default_value_t = false)]
+        precompute_csv_size: bool,
+
         /// Mount flag to allow all users to access files on this filesystem.
         /// By default access is restricted to the user who mounted it
         #[arg(long, default_value_t = false)]
@@ -132,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             allow_other,
             allow_root,
             auto_unmount,
+            precompute_csv_size,
         }) => {
             let mut mount_options = vec![];
 
@@ -153,8 +173,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 btr.mount_csv_one_shot(mount_point.to_string(), &mut mount_options)
                     .await?
             } else {
-                btr.mount_csv_realtime(mount_point.to_string(), &mut mount_options, 4_000_000)
-                    .await?
+                btr.mount_csv_realtime(
+                    mount_point.to_string(),
+                    &mut mount_options,
+                    4_000_000,
+                    *precompute_csv_size,
+                )
+                .await?
             };
 
             // Don't kill the program to keep the file system mounted

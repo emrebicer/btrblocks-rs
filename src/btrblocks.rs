@@ -560,6 +560,7 @@ impl Btr {
         mount_point: String,
         mount_options: &mut Vec<MountOption>,
         cache_limit: usize,
+        precompute_csv_size: bool,
     ) -> Result<BackgroundSession> {
         let file_metadata = self.file_metadata().await?;
         let column_count = file_metadata.parts.len();
@@ -569,20 +570,57 @@ impl Btr {
         let (store, path) =
             parse_generic_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
-        let mut compressed_size = 0;
+        let csv_size = if precompute_csv_size {
+            // Add the header size
+            let mut size = header_str.len();
 
-        // List all items under the directory
-        let mut stream = store.list(Some(&path));
+            // Create the ChunkedStream to calculate the correct decompressed csv size
+            let mut stream =
+                BtrChunkedStream::new(schema_ref.clone(), self.clone(), 10_000).await?;
 
-        while let Some(object_metadata) = stream.try_next().await.map_err(|err| {
-            BtrBlocksError::Custom(format!("failed to iterate over directory items: {}", err))
-        })? {
-            compressed_size += object_metadata.size;
-        }
+            // Write the rows data in batches
+            while let Some(batch) = stream.next().await {
+                let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+                let num_rows = batch.num_rows();
+                let num_columns = batch.num_columns();
+
+                let columns: Vec<&dyn Array> = (0..num_columns)
+                    .map(|col_index| batch.column(col_index).as_ref())
+                    .collect();
+
+                for row_index in 0..num_rows {
+                    size += 1;
+
+                    for (counter, column) in columns.iter().enumerate() {
+                        let value = extract_value_as_string(*column, row_index);
+                        size += value.len();
+
+                        if counter + 1 < column_count {
+                            size += 1;
+                        }
+                    }
+                }
+            }
+
+            size
+        } else {
+            let mut compressed_size = 0;
+
+            // List all items under the directory
+            let mut stream = store.list(Some(&path));
+
+            while let Some(object_metadata) = stream.try_next().await.map_err(|err| {
+                BtrBlocksError::Custom(format!("failed to iterate over directory items: {}", err))
+            })? {
+                compressed_size += object_metadata.size;
+            }
+
+            compressed_size * 8
+        };
 
         let btr_fs = BtrBlocksRealtimeFs::new(
             self.clone(),
-            compressed_size * 2,
+            csv_size,
             schema_ref,
             header_str,
             column_count,
@@ -606,8 +644,8 @@ impl Btr {
             .join(format!("column{}_part{}", column_index, part_index).as_str())
             .map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
-        let (store, path) =
-            parse_generic_url(&column_part_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
+        let (store, path) = parse_generic_url(&column_part_url)
+            .map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         Ok(store
             .get(&path)
