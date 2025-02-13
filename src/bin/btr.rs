@@ -5,11 +5,12 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
-use btrblocks_rs::{Btr, Schema};
+use btrblocks_rs::{stream::CsvDecompressionStream, Btr, Schema};
 use clap::{Parser, Subcommand};
 use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
 use fuser::MountOption;
+use futures::StreamExt;
 
 #[derive(Parser)]
 #[command(
@@ -53,16 +54,7 @@ enum Commands {
         #[arg(short, long)]
         btr_path: String,
     },
-    /// Run an SQL query on the given btr compressed file
-    Query {
-        #[arg(short, long)]
-        btr_path: String,
-
-        /// SQL query to execute, for example "select * from btr where column_0 = 6"
-        #[arg(short, long)]
-        sql: String,
-    },
-    /// Mount a new file system with fuse and put the decompressed csv file there
+    /// Mount a new file system with fuse and expose the decompressed csv file there
     MountCsv {
         #[arg(short, long)]
         btr_path: String,
@@ -108,6 +100,20 @@ enum Commands {
         /// Mount flag to automatically unmount when the mounting process exits
         #[arg(long, default_value_t = false)]
         auto_unmount: bool,
+    },
+    /// Decompress the btr compressed file into csv and print the result to stdout
+    PrintCsv {
+        #[arg(short, long)]
+        btr_path: String,
+    },
+    /// Run an SQL query on the given btr compressed file
+    Query {
+        #[arg(short, long)]
+        btr_path: String,
+
+        /// SQL query to execute, for example "select * from btr where column_0 = 6"
+        #[arg(short, long)]
+        sql: String,
     },
 }
 
@@ -186,6 +192,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // unless forcefully killed
             loop {
                 sleep(Duration::from_secs(1));
+            }
+        }
+        Some(Commands::PrintCsv { btr_path }) => {
+            let btr = Btr::from_url(btr_path.to_string()).await?;
+
+            let mut csv_decompression_stream = CsvDecompressionStream::new(btr, 100_000).await?;
+
+            while let Some(batch_res) = csv_decompression_stream.next().await {
+                let batch = batch_res?;
+                print!("{batch}");
             }
         }
         None => {}
