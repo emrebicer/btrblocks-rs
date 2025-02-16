@@ -5,13 +5,15 @@ use crate::{
     util::{ensure_protocol, parse_generic_url, string_to_btr_url},
     Result,
 };
+use csv::ReaderBuilder;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use fuser::{BackgroundSession, MountOption};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectStore, WriteMultipart};
 use serde::Deserialize;
-use std::{cmp::max, path::PathBuf};
+use std::io::Write;
+use std::{cmp::max, collections::HashMap, fs::File, path::PathBuf};
 use temp_dir::TempDir;
 use url::Url;
 
@@ -383,45 +385,154 @@ impl Btr {
 
     /// Construct a Btr object from an existing CSV file by compressing it
     /// `btr_path` is the target path for the BtrBlocks compressed file output
-    /// Currently this function is only supported for local filesystem
-    pub async fn from_csv(csv_path: PathBuf, btr_path: PathBuf, schema: Schema) -> Result<Self> {
-        // TODO: refactor this to use object store as well, need to read csv here and pass in data
-        // to wrapper, (perhaps lines as string vector?)
-        let bin_temp_dir = TempDir::new().map_err(|err| {
-            BtrBlocksError::Custom(
-                format!("failed to create a temp dir for binary data: {}", err).to_string(),
-            )
-        })?;
+    /// Currently the csv file can be from supported object stores, but resulting btr path
+    /// must only be on the local fs
+    pub async fn from_csv(
+        csv_url: Url,
+        btr_path: PathBuf,
+        schema: Schema,
+        has_headers: bool,
+    ) -> Result<Self> {
+        // Read the csv file in memory
+        let (store, path) =
+            parse_generic_url(&csv_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
-        let mut schema_data_vec = vec![];
-        for column in schema.columns {
-            schema_data_vec.push(column.name);
-            schema_data_vec.push(column.r#type.into());
+        let csv_bytes = store
+            .get(&path)
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
+            .bytes()
+            .await
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
+            .to_vec();
+
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(has_headers)
+            .from_reader(csv_bytes.as_slice());
+
+        // Create a HashMap to store the data for each column
+        let mut columns_data: HashMap<String, Vec<String>> = HashMap::new();
+        for col in &schema.columns {
+            columns_data.insert(col.name.clone(), Vec::new());
         }
+
+        let headers = rdr
+            .headers()
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
+            .clone();
 
         let btr_path_str = btr_path
             .to_str()
             .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
             .to_string();
 
-        match ffi::csv_to_btr(
-            csv_path
-                .to_str()
-                .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-                .to_string(),
-            btr_path_str.clone(),
-            format!(
-                "{}/",
-                bin_temp_dir
-                    .path()
-                    .to_str()
-                    .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
-            ),
-            schema_data_vec,
-        ) {
-            Ok(_) => Btr::from_url(btr_path_str).await,
-            Err(err) => Err(BtrBlocksError::BtrBlocksLibWrapper(err.to_string())),
+        let mut raw_parts_data = vec![];
+
+        let records: Vec<csv::Result<csv::StringRecord>> = rdr.records().collect();
+
+        // Iterate over the columns in the given schema
+        for (btr_col_index, col) in schema.columns.iter().enumerate() {
+
+            let parts_count = match col.r#type {
+                ColumnType::Integer => {
+                    // Add the integer column indicator to the raw_parts_data
+                    raw_parts_data.push(0);
+                    let mut data = vec![];
+                    for record_res in &records {
+                        let record = record_res
+                            .as_ref()
+                            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+                        data.push(
+                            record
+                                .get(btr_col_index)
+                                .unwrap_or("0")
+                                .parse::<i32>()
+                                .map_err(|err| BtrBlocksError::Custom(err.to_string()))?,
+                        );
+                    }
+
+                    ffi::compress_column_i32(btr_path_str.clone(), &data, btr_col_index as u32)
+                        .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?
+                }
+                ColumnType::Double => {
+                    // Add the double column indicator to the raw_parts_data
+                    raw_parts_data.push(1);
+                    let mut data = vec![];
+                    for record_res in &records {
+                        let record = record_res
+                            .as_ref()
+                            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+                        data.push(
+                            record
+                                .get(btr_col_index)
+                                .unwrap_or("0.0")
+                                .parse::<f64>()
+                                .map_err(|err| BtrBlocksError::Custom(err.to_string()))?,
+                        );
+                    }
+
+                    ffi::compress_column_f64(btr_path_str.clone(), &data, btr_col_index as u32)
+                        .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?
+                }
+                ColumnType::String => {
+                    // Add the string column indicator to the raw_parts_data
+                    raw_parts_data.push(2);
+                    let mut data = vec![];
+                    for record_res in &records {
+                        let record = record_res
+                            .as_ref()
+                            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+                        data.push(record.get(btr_col_index).unwrap_or("NULL").to_string());
+                    }
+
+                    let bin_temp_dir = TempDir::new().map_err(|err| {
+                        BtrBlocksError::Custom(
+                            format!("failed to create a temp dir for binary data: {}", err)
+                                .to_string(),
+                        )
+                    })?;
+
+                    let bin_temp_dir_str = bin_temp_dir
+                        .path()
+                        .to_str()
+                        .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
+                        .to_string();
+
+                    ffi::compress_column_string(
+                        btr_path_str.clone(),
+                        &data,
+                        btr_col_index as u32,
+                        bin_temp_dir_str,
+                    )
+                    .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?
+                }
+                _ => {
+                    unimplemented!()
+                }
+            };
+
+            // Add the parts_count for this column to the raw_parts_data
+            raw_parts_data.push(parts_count);
         }
+
+        // Finally write the metadata to the btr dir
+        let num_chunks = ffi::get_num_chunks(records.len() as u64)
+            .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?;
+
+        let metadata_bytes =
+            ffi::get_file_metadata_bytes(schema.columns.len() as u32, num_chunks, raw_parts_data)
+                .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?;
+
+        let mut file = File::create(format!("{btr_path_str}/metadata"))
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+        file.write_all(&metadata_bytes)
+            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
+
+        Btr::from_url(btr_path_str.clone()).await
     }
 
     /// Decompressed the btr file and writes the resulting CSV to the

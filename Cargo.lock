@@ -496,6 +496,7 @@ dependencies = [
  "async-trait",
  "clap",
  "cmake",
+ "csv",
  "cxx",
  "cxx-build",
  "datafusion",

@@ -59,12 +59,26 @@ pub mod ffi {
             column_index: u32,
             part_index: u32,
         ) -> Result<Vec<f64>>;
-        fn csv_to_btr(
-            csv_path: String,
+
+        fn compress_column_i32(btr_path: String, data: &Vec<i32>, column_index: u32)
+            -> Result<u32>;
+
+        fn compress_column_f64(btr_path: String, data: &Vec<f64>, column_index: u32)
+            -> Result<u32>;
+
+        fn compress_column_string(
             btr_path: String,
+            data: &Vec<String>,
+            column_index: u32,
             binary_path: String,
-            schema_data_vec: Vec<String>,
-        ) -> Result<()>;
+        ) -> Result<u32>;
+
+        fn get_num_chunks(row_count: u64) -> Result<u32>;
+        fn get_file_metadata_bytes(
+            num_columns: u32,
+            num_chunks: u32,
+            parts: Vec<u32>,
+        ) -> Result<Vec<u8>>;
 
         unsafe fn relation_add_column_int(
             relation: *mut Relation,

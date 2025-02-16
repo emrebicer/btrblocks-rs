@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::thread::sleep;
 use std::time::Duration;
 
+use btrblocks_rs::util::string_to_btr_url;
 use btrblocks_rs::{stream::CsvDecompressionStream, Btr, Schema};
 use clap::{Parser, Subcommand};
 use datafusion::error::Result;
@@ -139,12 +140,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let yaml_content = fs::read_to_string(schema_path)?;
             let schema: Schema = serde_yaml::from_str(&yaml_content)?;
 
-            Btr::from_csv(
-                PathBuf::from_str(csv_path)?,
-                PathBuf::from_str(btr_path)?,
-                schema,
-            )
-            .await?;
+            let csv_url = string_to_btr_url(&mut csv_path.clone())?;
+            Btr::from_csv(csv_url, PathBuf::from_str(btr_path)?, schema, true).await?;
         }
         Some(Commands::ToCsv { csv_path, btr_path }) => {
             let btr = Btr::from_url(btr_path.to_string()).await?;

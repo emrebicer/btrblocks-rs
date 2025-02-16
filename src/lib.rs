@@ -1,10 +1,11 @@
 mod btrblocks;
+pub mod compression;
 pub mod datafusion;
 mod error;
 mod ffi;
 mod mount;
 pub mod stream;
-mod util;
+pub mod util;
 
 pub use btrblocks::*;
 
@@ -30,6 +31,7 @@ mod tests {
     use temp_dir::TempDir;
 
     use crate::datafusion::BtrBlocksDataSource;
+    use crate::util::string_to_btr_url;
     use crate::ColumnType;
 
     fn get_mock_ids() -> Vec<i32> {
@@ -85,7 +87,9 @@ mod tests {
             crate::ColumnMetadata::new("Score".to_string(), crate::ColumnType::Double),
         ]);
 
-        let res = crate::Btr::from_csv(csv_path, btr_path, schema).await;
+        let csv_url = string_to_btr_url(&mut csv_path.to_str().unwrap().to_string()).unwrap();
+
+        let res = crate::Btr::from_csv(csv_url, btr_path, schema, false).await;
         assert!(res.is_ok());
 
         res.unwrap()
