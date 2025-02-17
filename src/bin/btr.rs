@@ -2,8 +2,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::thread::sleep;
-use std::time::Duration;
 
 use btrblocks_rs::util::string_to_btr_url;
 use btrblocks_rs::{stream::CsvDecompressionStream, Btr, Schema};
@@ -187,9 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Don't kill the program to keep the file system mounted
             // unless forcefully killed
-            loop {
-                sleep(Duration::from_secs(1));
-            }
+            tokio::signal::ctrl_c().await?;
         }
         Some(Commands::PrintCsv { btr_path }) => {
             let btr = Btr::from_url(btr_path.to_string()).await?;
