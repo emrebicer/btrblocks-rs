@@ -10,6 +10,7 @@ use datafusion::error::Result;
 use datafusion::prelude::SessionContext;
 use fuser::MountOption;
 use futures::StreamExt;
+use std::io::{self, Write};
 
 #[derive(Parser)]
 #[command(
@@ -192,9 +193,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut csv_decompression_stream = CsvDecompressionStream::new(btr, 100_000).await?;
 
+            // Acquire stdout lock for more performant consecutive writes
+            let mut stdout = io::stdout().lock();
+
             while let Some(batch_res) = csv_decompression_stream.next().await {
                 let batch = batch_res?;
-                print!("{batch}");
+                stdout.write_all(&batch.as_bytes())?;
             }
         }
         None => {}
