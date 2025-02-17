@@ -64,14 +64,6 @@ impl BtrBlocksOneShotFs {
             MountOption::FSName("BtrBlocksOneShotFs".to_string()),
         ];
         options.append(mount_options);
-        // if matches.get_flag("auto_unmount") {
-        // options.push(MountOption::AllowRoot);
-        // options.push(MountOption::AllowOther);
-        // options.push(MountOption::AutoUnmount);
-        // }
-        // if matches.get_flag("allow-root") {
-        // options.push(MountOption::AllowRoot);
-        // }
         fuser::spawn_mount2(self, mount_point, &options)
             .map_err(|err| BtrBlocksError::Mount(err.to_string()))
     }

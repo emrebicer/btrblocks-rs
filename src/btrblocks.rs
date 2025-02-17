@@ -416,11 +416,6 @@ impl Btr {
             columns_data.insert(col.name.clone(), Vec::new());
         }
 
-        let headers = rdr
-            .headers()
-            .map_err(|err| BtrBlocksError::Custom(err.to_string()))?
-            .clone();
-
         let btr_path_str = btr_path
             .to_str()
             .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
