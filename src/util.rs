@@ -81,6 +81,14 @@ pub fn parse_generic_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path)> {
             ),
             path,
         )),
+        ObjectStoreScheme::MicrosoftAzure => Ok((
+            Box::new(
+                object_store::azure::MicrosoftAzureBuilder::from_env()
+                    .build()
+                    .map_err(|err| BtrBlocksError::ObjectStore(err.to_string()))?,
+            ),
+            path,
+        )),
         _ => Err(BtrBlocksError::ObjectStore(
             "Specified URL protocol is not supported".to_string(),
         )),

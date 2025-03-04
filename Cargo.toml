@@ -19,7 +19,7 @@ async-trait = { version = "0.1.41" }
 serde = { version = "1.0", features = ["derive"]}
 futures = "0.3.31"
 thiserror = { version = "1.0.58" }
-object_store = { version = "0.11.2", features = ["aws", "gcp", "http"] }
+object_store = { version = "0.11.2", features = ["aws", "gcp", "http", "azure"] }
 url = "2.5.4"
 fuser = "0.15.1"
 libc = "0.2.169"
