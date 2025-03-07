@@ -422,16 +422,14 @@ impl Btr {
             .to_string();
 
         let mut raw_parts_data = vec![];
+        let mut type_and_thread_handles = vec![];
 
         let records: Vec<csv::Result<csv::StringRecord>> = rdr.records().collect();
 
         // Iterate over the columns in the given schema
         for (btr_col_index, col) in schema.columns.iter().enumerate() {
-
-            let parts_count = match col.r#type {
+            match col.r#type {
                 ColumnType::Integer => {
-                    // Add the integer column indicator to the raw_parts_data
-                    raw_parts_data.push(0);
                     let mut data = vec![];
                     for record_res in &records {
                         let record = record_res
@@ -447,12 +445,15 @@ impl Btr {
                         );
                     }
 
-                    ffi::compress_column_i32(btr_path_str.clone(), &data, btr_col_index as u32)
-                        .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?
+                    let btr_path_str = btr_path_str.clone();
+                    let handle = tokio::spawn(async move {
+                        ffi::compress_column_i32(btr_path_str, &data, btr_col_index as u32)
+                            .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))
+                    });
+
+                    type_and_thread_handles.push((0, handle));
                 }
                 ColumnType::Double => {
-                    // Add the double column indicator to the raw_parts_data
-                    raw_parts_data.push(1);
                     let mut data = vec![];
                     for record_res in &records {
                         let record = record_res
@@ -468,12 +469,15 @@ impl Btr {
                         );
                     }
 
-                    ffi::compress_column_f64(btr_path_str.clone(), &data, btr_col_index as u32)
-                        .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?
+                    let btr_path_str = btr_path_str.clone();
+                    let handle = tokio::spawn(async move {
+                        ffi::compress_column_f64(btr_path_str, &data, btr_col_index as u32)
+                            .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))
+                    });
+
+                    type_and_thread_handles.push((1, handle));
                 }
                 ColumnType::String => {
-                    // Add the string column indicator to the raw_parts_data
-                    raw_parts_data.push(2);
                     let mut data = vec![];
                     for record_res in &records {
                         let record = record_res
@@ -496,21 +500,33 @@ impl Btr {
                         .ok_or(BtrBlocksError::Path("must be a valid path".to_string()))?
                         .to_string();
 
-                    ffi::compress_column_string(
-                        btr_path_str.clone(),
-                        &data,
-                        btr_col_index as u32,
-                        bin_temp_dir_str,
-                    )
-                    .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))?
+                    let btr_path_str = btr_path_str.clone();
+                    let handle = tokio::spawn(async move {
+                        ffi::compress_column_string(
+                            btr_path_str,
+                            &data,
+                            btr_col_index as u32,
+                            bin_temp_dir_str,
+                        )
+                        .map_err(|err| BtrBlocksError::BtrBlocksLibWrapper(err.to_string()))
+                    });
+
+                    type_and_thread_handles.push((2, handle));
                 }
                 _ => {
                     unimplemented!()
                 }
             };
+        }
 
-            // Add the parts_count for this column to the raw_parts_data
-            raw_parts_data.push(parts_count);
+        // Construct the raw parts data
+        for (r#type, handle) in type_and_thread_handles {
+            raw_parts_data.push(r#type);
+
+            match handle.await {
+                Ok(parts_count) => raw_parts_data.push(parts_count?),
+                Err(e) => return Err(BtrBlocksError::Custom(format!("tokio join error: {}", e))),
+            }
         }
 
         // Finally write the metadata to the btr dir
