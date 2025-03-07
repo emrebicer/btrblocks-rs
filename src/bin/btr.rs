@@ -17,7 +17,7 @@ use std::io::{self, Write};
     version,
     about = "btr is a program that makes use of `btrblocks_rs` under to hood to interact with btrblocks compressed files",
     long_about = "btr is a program that makes use of `btrblocks_rs` under to hood to interact with btrblocks compressed files.
-It can access to multiple objects stores such as local filesystem, Amazon s3, Google Cloud Storage and HTTP file servers.
+It can access to multiple objects stores such as local filesystem, Amazon s3, Google Cloud Storage, Azure Blob Storage, and HTTP file servers.
 
 For some object stores, you should provide your credentials and store information via environment variables;
  - Amazon s3: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION and AWS_BUCKET_NAME",
@@ -43,6 +43,10 @@ enum Commands {
         /// Path to the YAML file that describes the schema of the CSV file
         #[arg(short, long)]
         schema_path: String,
+
+        /// Whether to treat the first row as a special header row
+        #[arg(long, default_value_t = true)]
+        has_headers: bool,
     },
     /// Decompress a btr file into CSV format
     ToCsv {
@@ -135,12 +139,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             csv_path,
             btr_path,
             schema_path,
+            has_headers
         }) => {
             let yaml_content = fs::read_to_string(schema_path)?;
             let schema: Schema = serde_yaml::from_str(&yaml_content)?;
 
             let csv_url = string_to_btr_url(&mut csv_path.clone())?;
-            Btr::from_csv(csv_url, PathBuf::from_str(btr_path)?, schema, true).await?;
+            Btr::from_csv(csv_url, PathBuf::from_str(btr_path)?, schema, *has_headers).await?;
         }
         Some(Commands::ToCsv { csv_path, btr_path }) => {
             let btr = Btr::from_url(btr_path.to_string()).await?;
