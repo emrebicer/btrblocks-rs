@@ -265,7 +265,7 @@ mod tests {
         let ctx = SessionContext::new();
 
         let custom_table_provider =
-            BtrBlocksDataSource::new(btr_temp_dir.path().to_str().unwrap().to_string()).await;
+            BtrBlocksDataSource::new(btr_temp_dir.path().to_str().unwrap().to_string(), 3).await;
         ctx.register_table("btr", Arc::new(custom_table_provider))
             .unwrap();
 

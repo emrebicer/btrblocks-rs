@@ -118,6 +118,10 @@ enum Commands {
         /// SQL query to execute, for example "select * from btr where column_0 = 6"
         #[arg(short, long)]
         sql: String,
+
+        /// The number of rows per poll from the decompression
+        #[arg(short, long, default_value_t = 300_000)]
+        num_rows_per_poll: usize,
     },
 }
 
@@ -126,11 +130,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Query { btr_path, sql }) => {
+        Some(Commands::Query {
+            btr_path,
+            sql,
+            num_rows_per_poll,
+        }) => {
             let ctx = SessionContext::new();
 
-            let custom_table_provider =
-                btrblocks_rs::datafusion::BtrBlocksDataSource::new(btr_path.to_string()).await;
+            let custom_table_provider = btrblocks_rs::datafusion::BtrBlocksDataSource::new(
+                btr_path.to_string(),
+                *num_rows_per_poll,
+            )
+            .await;
             ctx.register_table("btr", Arc::new(custom_table_provider))?;
             let df = ctx.sql(sql.as_str()).await?;
             df.show().await?;
@@ -139,7 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             csv_path,
             btr_path,
             schema_path,
-            has_headers
+            has_headers,
         }) => {
             let yaml_content = fs::read_to_string(schema_path)?;
             let schema: Schema = serde_yaml::from_str(&yaml_content)?;

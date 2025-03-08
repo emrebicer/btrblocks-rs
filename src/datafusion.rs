@@ -23,14 +23,16 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
 #[derive(Debug, Clone)]
 pub struct BtrBlocksDataSource {
     pub btr: Btr,
+    num_rows_per_poll: usize,
 }
 
 impl BtrBlocksDataSource {
-    pub async fn new(btr_url: String) -> Self {
+    pub async fn new(btr_url: String, num_rows_per_poll: usize) -> Self {
         Self {
             btr: Btr::from_url(btr_url)
                 .await
                 .expect("the URL should be a valid URL pointing to a btr compressed file"),
+            num_rows_per_poll,
         }
     }
     pub(crate) async fn create_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -126,20 +128,12 @@ impl ExecutionPlan for BtrBlocksExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let meta = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current()
-                .block_on(self.data_source.btr.file_metadata())
-                .expect("get file metadata from given btr path")
-        });
-
-        let column_count = max(meta.parts.len(), 1);
-
         // Return a chunked stream to keep memory usage low
         Ok(Box::pin(
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(ChunkedDecompressionStream::new(
                     self.data_source.btr.clone(),
-                    1_000_000 / column_count,
+                    self.data_source.num_rows_per_poll,
                 ))
             })
             .map_err(|err| DataFusionError::External(Box::new(err)))?,
