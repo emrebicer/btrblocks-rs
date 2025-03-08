@@ -7,23 +7,21 @@ use crate::error::BtrBlocksError;
 use crate::Btr;
 use crate::ColumnType;
 use datafusion::arrow::array::{Array, Float64Builder, Int32Builder, RecordBatch, StringBuilder};
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::execution::RecordBatchStream;
 use futures::stream::Stream;
+use tokio::sync::Mutex;
 
 /// A `stream` that reads btr and decompresses data part by part on each poll
 pub struct ChunkedDecompressionStream {
     btr: Btr,
     schema_ref: SchemaRef,
-    column_caches: Vec<DecompressedColumnCache>,
+    column_caches: Vec<Arc<Mutex<DecompressedColumnCache>>>,
     num_rows_per_poll: usize,
 }
 
 impl ChunkedDecompressionStream {
-    pub async fn new(
-        btr: Btr,
-        num_rows_per_poll: usize,
-    ) -> crate::Result<Self> {
+    pub async fn new(btr: Btr, num_rows_per_poll: usize) -> crate::Result<Self> {
         let mut column_caches = vec![];
 
         let metadata = btr.file_metadata().await?;
@@ -47,7 +45,7 @@ impl ChunkedDecompressionStream {
                 next_part_index_to_read: 0,
                 cached_data: vec,
             };
-            column_caches.push(cache);
+            column_caches.push(Arc::new(Mutex::new(cache)));
         }
 
         Ok(Self {
@@ -57,51 +55,56 @@ impl ChunkedDecompressionStream {
             num_rows_per_poll,
         })
     }
-}
 
-impl RecordBatchStream for ChunkedDecompressionStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema_ref.clone()
-    }
-}
-
-impl Stream for ChunkedDecompressionStream {
-    type Item = Result<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        let mut data_vec: Vec<Arc<dyn Array>> = vec![];
-        let nrpp = self.num_rows_per_poll;
-        let btr = self.btr.clone();
-
+    async fn is_decompression_finished(&mut self) -> bool {
+        let mut finished_count = 0;
         for column in &mut self.column_caches {
+            let column = column.lock().await;
             if column.finished() {
-                for inner_column in &mut self.column_caches {
-                    if !inner_column.finished() {
-                        // The columns should be all finished at the same time, if there is a
-                        // mismatch it means the data is corrupted  (some columns have different
-                        // number of elements), so return an execution error
-                        return Poll::Ready(Some(Err(DataFusionError::Execution(format!("A columns is finished and all elements are consumed, however the column with index {} is not finished, most likely the data is corrupted.", inner_column.column_index).to_string()))));
-                    }
+                finished_count += 1;
+            }
+        }
+
+        return finished_count == self.column_caches.len();
+    }
+
+    // Keep decompressing and reading data until there is enough cache
+    // to satisfy the num_rows_per_poll
+    //
+    // Spawns new threads for individual column decompressions
+    async fn decompress_until_enough_cache(&mut self) -> crate::Result<()> {
+        let mut handles = vec![];
+        let nrpp = self.num_rows_per_poll.to_owned();
+        for index in 0..self.column_caches.len() {
+            let col = Arc::clone(&self.column_caches[index]);
+            let btr = self.btr.clone();
+            handles.push(tokio::spawn(async move {
+                let col_guard = col.lock();
+                col_guard.await.read_until_enough_cache(&btr, nrpp).await
+            }));
+        }
+
+        for handle in handles {
+            match handle.await {
+                Ok(_res) => {}
+                Err(err) => {
+                    return Err(BtrBlocksError::Custom(format!(
+                        "failed to read until enough cache: {}",
+                        err
+                    )))
                 }
-
-                // All columns are finished, return None to hint the strem is done and shold not be
-                // polled anymore
-                return Poll::Ready(None);
             }
+        }
 
-            if let Err(e) = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current()
-                    .block_on(column.read_until_enough_cache(&btr, nrpp))
-            }) {
-                println!("failed to decompress part: {e}");
-                return Poll::Pending;
-            }
+        Ok(())
+    }
 
-            // Now consume the data for the stream
-            let num_elements_to_consume = min(column.current_cache_len(), nrpp);
+    // Populate the data for the datafusion stream from the existing cache
+    async fn populate_data_vec(&mut self) -> Vec<Arc<dyn Array>> {
+        let mut data_vec: Vec<Arc<dyn Array>> = vec![];
+        for column in &mut self.column_caches {
+            let mut column = column.lock().await;
+            let num_elements_to_consume = min(column.current_cache_len(), self.num_rows_per_poll);
 
             match &mut column.cached_data {
                 TypedCache::Int(vec) => {
@@ -135,6 +138,43 @@ impl Stream for ChunkedDecompressionStream {
                 }
             }
         }
+
+        return data_vec;
+    }
+}
+
+impl RecordBatchStream for ChunkedDecompressionStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema_ref.clone()
+    }
+}
+
+impl Stream for ChunkedDecompressionStream {
+    type Item = Result<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        // Check if the decompression is finished
+        if tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.is_decompression_finished())
+        }) {
+            return Poll::Ready(None);
+        }
+
+        // Decompress more parts until we have enough decompressed cache
+        if let Err(e) = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.decompress_until_enough_cache())
+        }) {
+            println!("failed to decompress: {e}");
+            return Poll::Pending;
+        }
+
+        // Read the data from the decompressed cache
+        let data_vec = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(self.populate_data_vec())
+        });
 
         let batch = RecordBatch::try_new(self.schema().clone(), data_vec)?;
         Poll::Ready(Some(Ok(batch)))
