@@ -57,6 +57,10 @@ enum Commands {
         /// Output btr compressed file path
         #[arg(short, long)]
         btr_path: String,
+
+        /// The number of rows per poll from the decompression
+        #[arg(short, long, default_value_t = 300_000)]
+        num_rows_per_poll: usize,
     },
     /// Mount a new file system with fuse and expose the decompressed csv file there
     MountCsv {
@@ -158,9 +162,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let csv_url = string_to_btr_url(&mut csv_path.clone())?;
             Btr::from_csv(csv_url, PathBuf::from_str(btr_path)?, schema, *has_headers).await?;
         }
-        Some(Commands::ToCsv { csv_path, btr_path }) => {
+        Some(Commands::ToCsv {
+            csv_path,
+            btr_path,
+            num_rows_per_poll,
+        }) => {
             let btr = Btr::from_url(btr_path.to_string()).await?;
-            btr.write_to_csv(csv_path.to_string()).await?;
+            btr.write_to_csv(csv_path.to_string(), *num_rows_per_poll)
+                .await?;
         }
         Some(Commands::MountCsv {
             mount_point,

@@ -120,7 +120,7 @@ mod tests {
             temp_csv_dir.path().to_str().unwrap().to_string()
         );
 
-        let res = btr.write_to_csv(temp_csv_path.clone()).await;
+        let res = btr.write_to_csv(temp_csv_path.clone(), 3).await;
 
         assert!(res.is_ok());
 

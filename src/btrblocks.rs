@@ -548,19 +548,15 @@ impl Btr {
 
     /// Decompressed the btr file and writes the resulting CSV to the
     /// given `target_url`
-    pub async fn write_to_csv(&self, target_url: String) -> Result<()> {
+    pub async fn write_to_csv(&self, target_url: String, num_rows_per_poll: usize) -> Result<()> {
         let mut target_url = target_url.clone();
         ensure_protocol(&mut target_url);
         let target_url =
             Url::parse(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
-        // Create the csv header text
-        let file_metadata = self.file_metadata().await?;
-        let column_count = max(file_metadata.parts.len(), 1);
-
         // Create the ChunkedStream to read decompresssed data by parts
         let mut stream =
-            CsvDecompressionStream::new(self.clone(), 1_000_000 / column_count).await?;
+            CsvDecompressionStream::new(self.clone(), num_rows_per_poll).await?;
 
         let (store, path) =
             parse_generic_url(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
