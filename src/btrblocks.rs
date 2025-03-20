@@ -630,9 +630,6 @@ impl Btr {
         cache_limit: usize,
         precompute_csv_size: bool,
     ) -> Result<BackgroundSession> {
-        let file_metadata = self.file_metadata().await?;
-        let column_count = file_metadata.parts.len();
-        let header_str = self.csv_header().await?;
 
         let (store, path) =
             parse_generic_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
@@ -669,8 +666,6 @@ impl Btr {
         let btr_fs = BtrBlocksRealtimeFs::new(
             self.clone(),
             csv_size,
-            header_str,
-            column_count,
             cache_limit,
         )
         .await?;

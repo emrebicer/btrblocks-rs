@@ -65,7 +65,7 @@ impl ChunkedDecompressionStream {
             }
         }
 
-        return finished_count == self.column_caches.len();
+        finished_count == self.column_caches.len()
     }
 
     // Keep decompressing and reading data until there is enough cache
@@ -139,7 +139,7 @@ impl ChunkedDecompressionStream {
             }
         }
 
-        return data_vec;
+        data_vec
     }
 }
 

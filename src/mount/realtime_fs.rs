@@ -11,8 +11,7 @@ use std::time::{Duration, SystemTime};
 use tokio::runtime::Runtime;
 
 use crate::error::BtrBlocksError;
-use crate::stream::ChunkedDecompressionStream;
-use crate::util::extract_value_as_string;
+use crate::stream::CsvDecompressionStream;
 use crate::{Btr, Result};
 use futures::StreamExt;
 
@@ -26,10 +25,8 @@ pub struct BtrBlocksRealtimeFs {
     btr: Btr,
     decompressed_csv_size: usize,
     mount_time: SystemTime,
-    csv_header: String,
-    column_count: usize,
     cache_limit: usize,
-    stream: ChunkedDecompressionStream,
+    stream: CsvDecompressionStream,
     raw_csv_data: String,
     decompressed_bytes_count: usize,
     removed_bytes_count: usize,
@@ -41,20 +38,16 @@ impl BtrBlocksRealtimeFs {
     pub async fn new(
         btr: Btr,
         decompressed_csv_size: usize,
-        csv_header: String,
-        column_count: usize,
         cache_limit: usize,
     ) -> Result<Self> {
         Ok(Self {
             btr: btr.clone(),
             decompressed_csv_size,
             mount_time: SystemTime::now(),
-            csv_header: csv_header.clone(),
-            column_count,
             cache_limit,
-            stream: ChunkedDecompressionStream::new(btr, 10_000).await?,
-            raw_csv_data: csv_header.clone(),
-            decompressed_bytes_count: csv_header.len(),
+            stream: CsvDecompressionStream::new(btr, 10_000).await?,
+            raw_csv_data: "".to_string(),
+            decompressed_bytes_count: 0,
             removed_bytes_count: 0,
             ino_to_file: HashMap::from([
                 (1, (FileType::Directory, ".".to_string())),
@@ -81,7 +74,6 @@ impl BtrBlocksRealtimeFs {
             gid: unsafe { libc::getgid() },
             rdev: 0,
             flags: 0,
-            //flags: libc::O_DIRECT as u32, // hint direct_io to disable kernel caching
             blksize: 4096,
         }
     }
@@ -102,14 +94,13 @@ impl BtrBlocksRealtimeFs {
     }
 
     async fn decompress_from_range(&mut self, start: usize, end: usize) -> Result<String> {
-        //println!("new read request, start: {start}, end: {end}");
-
         // possibilities,
         // 1- cache is behind requested range (do nothing keep polling / or clear the cache?)
         // 2- start is in cache but end is not (keep polling)
         // 3- both start and end is in cache (perfect just return bytes)
         // 4- cache is past start (just reinit stream from start)
 
+        // Case 1
         if self.decompressed_bytes_count < start {
             self.clear_cache();
         }
@@ -129,19 +120,10 @@ impl BtrBlocksRealtimeFs {
 
         // Check if cache is past end (case 4, reinit stream)
         if self.removed_bytes_count > start {
-            //println!("@@@@ CACHE MISS! Reinit stream...");
-            self.stream = ChunkedDecompressionStream::new(
-                self.btr.clone(),
-                10_000,
-            )
-            .await?;
+            self.stream = CsvDecompressionStream::new(self.btr.clone(), 10_000).await?;
 
-            //self.raw_csv_data = String::new();
             self.raw_csv_data.clear();
             self.raw_csv_data.shrink_to_fit();
-
-            // Write the header row to the target
-            self.raw_csv_data.push_str(self.csv_header.as_str());
             self.decompressed_bytes_count = self.raw_csv_data.len();
             self.removed_bytes_count = 0;
         }
@@ -149,39 +131,10 @@ impl BtrBlocksRealtimeFs {
         // Keep polling the next rows to find the requested bytes in range
         while let Some(batch) = self.stream.next().await {
             let batch = batch.map_err(|err| BtrBlocksError::Custom(err.to_string()))?;
-            let num_rows = batch.num_rows();
-            let num_columns = batch.num_columns();
 
-            let columns: Vec<&dyn Array> = (0..num_columns)
-                .map(|col_index| batch.column(col_index).as_ref())
-                .collect();
+            self.raw_csv_data.push_str(&batch);
+            self.decompressed_bytes_count += batch.len();
 
-            for row_index in 0..num_rows {
-                self.raw_csv_data.push('\n');
-                self.decompressed_bytes_count += 1;
-
-                for (counter, column) in columns.iter().enumerate() {
-                    let value = extract_value_as_string(*column, row_index);
-                    self.raw_csv_data.push_str(&value.to_string());
-                    self.decompressed_bytes_count += value.len();
-
-                    if counter + 1 < self.column_count {
-                        self.raw_csv_data.push(',');
-                        self.decompressed_bytes_count += 1;
-                    }
-                }
-            }
-
-            // Check if our current decompressed data has reached the start
-            // There are 3 possibilities
-            //   - decompressed size has not reached the start
-            //      - Clear the cache
-            //   - decompressed size has reached the start but not reached the end
-            //      - Don't clear the cache keep decompressing
-            //   - decompressed size has reached the start and reached the end
-            //      - Return the requested chunk
-            //
-            //println!("Polled stream, decompressed_bytes_count: {decompressed_bytes_count}, removed_bytes_count: {removed_bytes_count}");
             if self.decompressed_bytes_count < start {
                 self.clear_cache();
             } else if self.decompressed_bytes_count >= start && self.decompressed_bytes_count >= end
@@ -199,10 +152,6 @@ impl BtrBlocksRealtimeFs {
         // We have reached the end of the decompressed data
         // If we have reached here, we now  calculate the actual decompressed full size
         // so update it
-        //println!(
-        //    "No more files to decompress... Old size: {}, new size: {}",
-        //    self.decompressed_csv_size, self.decompressed_bytes_count
-        //);
         self.decompressed_csv_size = self.decompressed_bytes_count;
 
         if start > self.decompressed_csv_size {
@@ -215,52 +164,21 @@ impl BtrBlocksRealtimeFs {
                 - (self.decompressed_bytes_count - start);
             Ok(self.raw_csv_data[start_index..].to_string())
         } else {
-            // we never should en up here... Because both start and end is
-            // in the decompressed area, which shoul have been returned earlier anyways
+            // We never should en up here... Because both start and end is
+            // in the decompressed area, which should have been returned earlier anyways
             Err(BtrBlocksError::Custom(
                 "Undefined behaviour, failed to decompress requested bytes".to_string(),
             ))
         }
-
-        //// Approach 2, just pad the rest of the bytes with new line
-        //if start > self.decompressed_bytes_count {
-        //    //return Ok("\0".repeat(end - start).to_string());
-        //    return Ok("".to_string());
-        //} else {
-        //    // We have some bytes that we want to have from the cache
-        //    // so pad the cache with \n until we have enough bytes
-        //    //let missing_len = end - self.decompressed_bytes_count;
-        //    //self.raw_csv_data.push_str(&"\0".repeat(missing_len));
-        //    //self.decompressed_bytes_count += missing_len;
-        //    //return Ok(self.raw_csv_data.clone());
-        //
-        //    //let missing_len = end - self.decompressed_bytes_count;
-        //    //self.raw_csv_data.push_str(&"\0".repeat(missing_len));
-        //    //self.decompressed_bytes_count += missing_len;
-        //    return Ok(self.raw_csv_data.clone());
-        //}
-
-        //Err(BtrBlocksError::Custom(
-        //    "Failed to decompress from range".to_string(),
-        //))
     }
 
     fn clear_cache(&mut self) {
         if self.raw_csv_data.len() > self.cache_limit {
             let bytes_to_remove = self.raw_csv_data.len() - self.cache_limit;
-            //println!(
-            //    "@@ Clearing unused cache... current cache size: {}, bytes to remove: {}",
-            //    self.raw_csv_data.len(),
-            //    bytes_to_remove
-            //);
             self.raw_csv_data.drain(..bytes_to_remove);
             self.raw_csv_data.shrink_to_fit();
-            //println!("1st case, clearing");
             self.removed_bytes_count += bytes_to_remove;
         }
-        //else {
-        //    println!("Not clearing cache, the size is only: {}", self.raw_csv_data.len());
-        //}
     }
 }
 
