@@ -3,6 +3,20 @@ name = "btrblocks-rs"
 version = "0.1.0"
 edition = "2021"
 authors = ["Emre Bicer <oebicer@gmail.com>"]
+license = "MIT"
+description = "A library to interact with the BtrBlocks compression"
+homepage = "https://github.com/emrebicer/btrblocks-rs"
+repository = "https://github.com/emrebicer/btrblocks-rs"
+readme = "README.md"
+keywords = ["compression", "btrblocks", "databases", "csv", "columnar"]
+categories = ["compression", "filesystem", "encoding", "database", "command-line-utilities"]
+
+
+
+
+
+
+
 
 [lib]
 path = "src/lib.rs"
