@@ -10,7 +10,7 @@ fn main() {
     let btrblocks_source = out_dir.join(Path::new("btrblocks"));
     if !btrblocks_source.exists() {
         git2::build::RepoBuilder::new()
-            .branch("lib-build-only-test")
+            .branch("btrwrapper")
             .clone(btrblocks_url, btrblocks_source.as_path())
             .expect("failed to clone git repo");
     }
