@@ -1,6 +1,5 @@
 use core::fmt;
 use std::any::Any;
-use std::cmp::max;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::sync::Arc;

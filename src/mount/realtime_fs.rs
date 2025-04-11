@@ -1,4 +1,3 @@
-use datafusion::arrow::array::Array;
 use fuser::{
     BackgroundSession, FileAttr, FileType, Filesystem, MountOption, ReplyAttr, ReplyData,
     ReplyDirectory, ReplyEntry, Request,
@@ -35,11 +34,7 @@ pub struct BtrBlocksRealtimeFs {
 }
 
 impl BtrBlocksRealtimeFs {
-    pub async fn new(
-        btr: Btr,
-        decompressed_csv_size: usize,
-        cache_limit: usize,
-    ) -> Result<Self> {
+    pub async fn new(btr: Btr, decompressed_csv_size: usize, cache_limit: usize) -> Result<Self> {
         Ok(Self {
             btr: btr.clone(),
             decompressed_csv_size,

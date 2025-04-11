@@ -1,5 +1,5 @@
-mod csv_decompression;
 mod chunked_decompression;
+mod csv_decompression;
 
-pub use csv_decompression::CsvDecompressionStream;
 pub use chunked_decompression::ChunkedDecompressionStream;
+pub use csv_decompression::CsvDecompressionStream;

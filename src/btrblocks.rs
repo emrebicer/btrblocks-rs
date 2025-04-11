@@ -180,9 +180,6 @@ impl FileMetadata {
 
     pub fn to_schema_ref(&self) -> Result<SchemaRef> {
         let mut fields = vec![];
-        let mut header_str = String::new();
-
-        let column_count = max(self.parts.len(), 1);
 
         for (counter, column) in self.parts.iter().enumerate() {
             let data_type = match column.r#type {
@@ -195,11 +192,6 @@ impl FileMetadata {
             let field_name = format!("column_{counter}");
 
             fields.push(Field::new(field_name.clone(), data_type, true));
-            header_str.push_str(field_name.as_str());
-
-            if counter + 1 < column_count {
-                header_str.push(',');
-            }
         }
 
         Ok(SchemaRef::new(ArrowSchema::new(fields)))
@@ -555,8 +547,7 @@ impl Btr {
             Url::parse(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
         // Create the ChunkedStream to read decompresssed data by parts
-        let mut stream =
-            CsvDecompressionStream::new(self.clone(), num_rows_per_poll).await?;
+        let mut stream = CsvDecompressionStream::new(self.clone(), num_rows_per_poll).await?;
 
         let (store, path) =
             parse_generic_url(&target_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
@@ -579,7 +570,7 @@ impl Btr {
         Ok(())
     }
 
-    async fn csv_header(&self) -> Result<String> {
+    pub async fn csv_header(&self) -> Result<String> {
         let file_metadata = self.file_metadata().await?;
         let column_count = max(file_metadata.parts.len(), 1);
         let mut header_str = String::new();
@@ -630,7 +621,6 @@ impl Btr {
         cache_limit: usize,
         precompute_csv_size: bool,
     ) -> Result<BackgroundSession> {
-
         let (store, path) =
             parse_generic_url(&self.btr_url).map_err(|err| BtrBlocksError::Url(err.to_string()))?;
 
@@ -663,12 +653,7 @@ impl Btr {
             compressed_size * 8
         };
 
-        let btr_fs = BtrBlocksRealtimeFs::new(
-            self.clone(),
-            csv_size,
-            cache_limit,
-        )
-        .await?;
+        let btr_fs = BtrBlocksRealtimeFs::new(self.clone(), csv_size, cache_limit).await?;
         btr_fs.mount(mount_point, mount_options)
     }
 

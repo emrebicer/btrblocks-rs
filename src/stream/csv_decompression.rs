@@ -18,22 +18,16 @@ pub struct CsvDecompressionStream {
 impl CsvDecompressionStream {
     pub async fn new(btr: Btr, num_rows_per_poll: usize) -> crate::Result<Self> {
         let file_metadata = btr.file_metadata().await?;
-
         let column_count = file_metadata.num_columns as usize;
+
+        let csv_header = btr
+            .clone()
+            .csv_header()
+            .await
+            .expect("csv_header should not fail");
 
         let chunked_decompression_stream =
             ChunkedDecompressionStream::new(btr, num_rows_per_poll).await?;
-
-        let mut csv_header = String::new();
-
-        for counter in 0..file_metadata.parts.len() {
-            let field_name = format!("column_{counter}");
-            csv_header.push_str(field_name.as_str());
-
-            if counter + 1 < column_count {
-                csv_header.push(',');
-            }
-        }
 
         Ok(Self {
             column_count,
