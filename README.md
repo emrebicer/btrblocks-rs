@@ -31,14 +31,14 @@ cargo t
 ```
 ## `btr` CLI
 The project also has a CLI program that uses the `btrblocks_rs` rust library under the hood and offers multiple features for interacting with the BtrBlocks format.
-##### Subcommands
+### Subcommands
 - `from-csv`: Compress a CSV file into btr format
 - `to-csv`: Decompress a btr file into CSV format
 - `mount-csv`: Mount a new file system with fuse and expose the decompressed csv file there
 - `print-csv`: Decompress the btr compressed file into csv and print the result to stdout
 - `query`: Run an SQL query on the given btr compressed file
 
-##### Compile the CLI
+### Compile the CLI
 Make sure you have the dependencies available to compile the C++ BtrBlocks library, and use cargo to compile the CLI;
 ```bash
 cargo build --features="cli" --no-default-features --release
